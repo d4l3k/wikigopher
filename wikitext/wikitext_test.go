@@ -1,8 +1,13 @@
 package wikitext
 
-import "testing"
+import (
+	"log"
+	"testing"
+)
 
 func TestConvert(t *testing.T) {
+	log.SetFlags(log.Flags() | log.Lshortfile)
+
 	cases := []struct {
 		in   string
 		want string
@@ -13,7 +18,15 @@ func TestConvert(t *testing.T) {
 		},
 		{
 			"\n\n== Test ==",
-			"<h2>Test</h2>",
+			"\n\n<h2> Test </h2>",
+		},
+		{
+			"\n\n=Test=",
+			"\n\n<h1>Test</h1>",
+		},
+		{
+			"\n\n'''Test'''",
+			"\n\n<b>Test</b>",
 		},
 		{
 			"\n\n* foo\n* nah\n* woof",
@@ -23,7 +36,13 @@ func TestConvert(t *testing.T) {
 			"\n\n----",
 			"\n\n<hr/>",
 		},
+		{
+			"{{short description|Test}}\n\nBlah",
+			"<p>Blah</p>",
+		},
 	}
+
+	debugRules(false)
 
 	for _, c := range cases {
 		c := c

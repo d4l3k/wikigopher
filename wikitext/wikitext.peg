@@ -43,14 +43,15 @@ redirect <- redirect_word
             });
     return redirect;
     */
-    return nil,nil
+    return "todo redirect", nil
 }
 
 // These rules are exposed as start rules.
 generic_newline_attributes <- generic_newline_attribute*
+
 table_attributes
-  <- (table_attribute / optionalSpaceToken broken_table_attribute_name_char {
-  return nil, nil })*
+  <- (table_attribute / optionalSpaceToken b:broken_table_attribute_name_char {
+  return b, nil })*
 
 //The 'redirect' magic word.
 // The leading whitespace allowed is due to the PHP trim() function.
@@ -84,7 +85,9 @@ start_async
 // A document (start rule) is a sequence of toplevelblocks. Tokens are
 // emitted in chunks per toplevelblock to avoid buffering the full document.
 //
-tlb <- !eof b:block { return b, nil }
+tlb <- !eof b:block {
+  return b, nil
+}
 
 
 // The actual contents of each block.
@@ -94,9 +97,9 @@ block
     <- &sof redirect comment_or_includes block_line? {return "comment_or_includes", nil  /*return [r].concat(cil, bl || []);*/ }
     / block_lines
     / & '<' rs:( cm:comment &eolf {return cm, nil  /*return c;*/ }
-            // avoid a paragraph if we know that the line starts with a block tag
-            / block_tag
-            ) {return rs, nil  /*return rs;*/ }
+           // avoid a paragraph if we know that the line starts with a block tag
+           / block_tag
+           ) {return rs, nil  /*return rs;*/ }
     / paragraph
     // Inlineline includes generic tags; wrapped into paragraphs in token
     // transform and DOM postprocessor
@@ -107,7 +110,7 @@ block
 // A block nested in other constructs. Avoid eating end delimiters for other
 // constructs by checking against inline_breaks first.
 //
-nested_block <- !inline_breaks block {return nil, nil /*return b;*/ }
+nested_block <- !inline_breaks b:block {return b, nil /*return b;*/ }
 
 
 // The same, but suitable for use inside a table construct.
@@ -121,7 +124,8 @@ nested_block_in_table
     // overflow in large tables
     // See https://phabricator.wikimedia.org/T59670
     & {
-    return false, nil
+    push(c, "tableDataBlock", true)
+    return true, nil
     /*
     return stops.push('tableDataBlock', true);
     */
@@ -130,13 +134,15 @@ nested_block_in_table
     // instead, so that multi-line th content followed by a line prefixed with
     // a comment is also handled. Alternatively, implement a sol look-behind
     // assertion accepting spaces and comments.
-    !(sol (space* sol)? space* (pipe / "!")) nested_block {return nil, nil
+    !(sol (space* sol)? space* (pipe / "!")) b:nested_block {
+    pop(c, "tableDataBlock")
+    return b, nil
     /*
         stops.pop('tableDataBlock');
         return b;
         */
     }
-  / & {return false, nil /*return stops.pop('tableDataBlock');*/ }
+  / & {return pop(c, "tableDataBlock").(bool), nil /*return stops.pop('tableDataBlock');*/ }
 
 
 // Line-based block constructs.
@@ -150,7 +156,7 @@ block_lines
 // Horizontal rules
 hr <- "----" "-"*
 // Check if a newline or content follows
-  ( &sol "" {return nil, nil /*return undefined;*/ } / "" {return nil, nil /*return true;*/ } ) {
+  ( &sol "" {return nil, nil /*return undefined;*/ } / "" {return true, nil /*return true;*/ } ) {
   return &html.Node{
     Type: html.ElementNode,
     Data: "hr",
@@ -213,7 +219,7 @@ br <- optionalSpaceToken &newline {
 }
 
 inline_breaks
-  <- & {return false, nil /*return inlineBreaks(input, endOffset(), stops); */}
+  <- & {return inlineBreaks(c) /*return inlineBreaks(input, endOffset(), stops); */}
 
 inlineline
   <- c2:(urltext
@@ -250,16 +256,21 @@ heading <- & "=" // guard, to make sure '='+ will match.
      & { return inc(c, "h") /*return stops.inc('h');*/ }
      s:'='+ // moved in here to make s accessible to inner action
      ce:(
-       (ill:inlineline? {return ill, nil /*return ill || [];*/ })
-       '='+
+       (ill:inlineline?)
+       '='+ {return ill, nil}
      )?
      & {return ce!=nil || len(concat(s)) > 2, nil /*return ce || s.length > 2;*/ }
-     ("" {return nil, nil /*return endOffset();*/ })
+     //("" {return nil, nil /*return endOffset();*/ })
      spc:(spaces / comment)*
      &eolf
      {
      dec(c, "h")
-     return concat("heading", ce, spc), nil
+     n := &html.Node{
+       Type: html.ElementNode,
+       Data: "h"+strconv.Itoa(len(concat(s))),
+     }
+     addChild(n, []interface{}{ce, spc})
+     return n, nil
      /*
         var c;
         var e;
@@ -308,12 +319,7 @@ heading <- & "=" // guard, to make sure '='+ will match.
       }
     / & {dec(c, "h"); return false, nil /*stops.dec('h'); return false;*/ }
     ) {
-    n := &html.Node{
-      Type: html.ElementNode,
-      Data: "h1",
-    }
-    addChild(n, r)
-    return n, nil /*return r;*/
+    return r, nil /*return r;*/
   }
 
 
@@ -399,7 +405,7 @@ extlink
           */
         }
         ( space / unispace )*
-        ( "" {return nil, nil /*return endOffset();*/ })
+        //( "" {return nil, nil /*return endOffset();*/ })
         inlineline?
         "]" {return nil, nil
         /*
@@ -492,24 +498,24 @@ no_punctuation_char <- [^ :\][\r\n"'<>,.&%{]
 // the 's' and 'r' pieces below match the characters in
 // EXT_LINK_URL_CLASS which aren't included in no_punctuation_char
 url
-  <- url_protocol
-    (urladdr / "")
-    (  ( !inline_breaks
-              no_punctuation_char
-              {return nil, nil /*return c; */}
+  <- proto:url_protocol
+    addr:(urladdr / "")
+    path:(  ( !inline_breaks
+              c1:no_punctuation_char
+              {return c1, nil /*return c; */}
             )
-            / [.:,']  {return nil, nil/* return s; */}
+            / s:[.:,']  {return s, nil/* return s; */}
             / comment
             / tplarg_or_template
             / ! ( "&" ( [lL][tT] / [gG][tT] ) ";" )
-                (
-                    & "&" htmlentity {return nil, nil/* return he; */}
+                r:(
+                    & "&" he:htmlentity {return he, nil/* return he; */}
                   / [&%{]
-                ) {return nil, nil /*return r;*/ }
+                ) {return r, nil /*return r;*/ }
          )*
 // Must be at least one character after the protocol
          & {return false, nil /*return addr.length > 0 || path.length > 0;*/ }
-{return nil, nil
+{return []interface{}{proto, addr, path}, nil
 /*
     return tu.flattenString([proto, addr].concat(path));
     */
@@ -539,12 +545,12 @@ autourl
             / comment
             / tplarg_or_template
             / ! ( raw_htmlentity &{return false, nil /* return /^[<>\u00A0]$/.test(rhe); */} )
-                (
-                    & "&" htmlentity {return nil, nil/* return he; */}
+                r:(
+                    & "&" he:htmlentity {return he, nil/* return he; */}
                   / [&%{]
-                ) {return nil, nil/* return r; */}
+                ) {return r, nil/* return r; */}
          )*
-{return nil,nil
+{return "TODO: autourl",nil
 /*
 // as in Parser.php::makeFreeExternalLink, we're going to
 // yank trailing punctuation out of this match.
@@ -594,7 +600,7 @@ urladdr
 // and close as we find them.
 //
 tplarg_or_template
-  <- &"{{" &{return false, nil}
+  <- &"{{" //&{return false, nil}
 //
 //// Refuse to recurse beyond `maxDepth` levels. Default in the PHP parser
 //// is $wgMaxTemplateDepth = 40; This is to prevent crashing from
@@ -606,29 +612,29 @@ tplarg_or_template
 //      } else {
 //        return false;
 //      }
-    tplarg_or_template_guarded {return nil, nil /*return t;*/ }
+    t:tplarg_or_template_guarded {return t, nil /*return t;*/ }
 
 tplarg_or_template_guarded
-  <- &{return false, nil /* return stops.inc('templatedepth');*/ }
-    ( &("{{" &("{{{"+ !'{') tplarg) (template/broken_template) {return nil, nil /*return a;*/ }
-      / ('{' &("{{{"+ !'{'))? tplarg {return nil, nil /*return [a].concat(b);*/ }
-      / ('{' &("{{" !'{'))? template {return nil, nil /*return [a].concat(b);*/ }
-      / broken_template {return nil, nil /*return a;*/ }
-    ) {return nil, nil
+  <- &{return inc(c, "templatedepth") /* return stops.inc('templatedepth');*/ }
+    r:( &("{{" &("{{{"+ !'{') tplarg) a:(template/broken_template) {return a, nil /*return a;*/ }
+      / a:('{' &("{{{"+ !'{'))? b:tplarg {return concat(a, b), nil /*return [a].concat(b);*/ }
+      / a:('{' &("{{" !'{'))? b:template {return concat(a, b), nil /*return [a].concat(b);*/ }
+      / a:broken_template {return a, nil /*return a;*/ }
+    ) {return r, nil
     /*
       stops.dec('templatedepth');
       return r;
       */
     }
-    / & {return false, nil /*return stops.dec('templatedepth');*/ }
+    / & {return dec(c, "templatedepth") /*return stops.dec('templatedepth');*/ }
 
 tplarg_or_template_or_bust
-    <- (tplarg_or_template / .)+ {return nil, nil /*return tu.flattenIfArray(r); */}
+    <- r:(tplarg_or_template / .)+ {return r, nil /*return tu.flattenIfArray(r); */}
 
 template
   <- ("" {return nil, nil/* return stops.push('preproc', / * {{ * /"}}"); */})
-    ( template_preproc / &{return false, nil/* return stops.popTo('preproc', stopLen); */} )
-    {return nil, nil/* stops.popTo('preproc', stopLen); return t; */}
+    t:( template_preproc / &{return false, nil/* return stops.popTo('preproc', stopLen); */} )
+    {return t, nil/* stops.popTo('preproc', stopLen); return t; */}
 
 // The PHP preprocessor maintains a single stack of "closing token we
 // are currently looking for", with no backtracking.  This means that
@@ -665,24 +671,24 @@ template
 broken_template
   <- &"{{" &{return false, nil/* return stops.push('preproc', 'broken'); */}
 // for broken-template,  deliberately fail to pop the preproc stops stack
-    "{{" {return nil, nil/* return t; */}
+    t:"{{" {return t, nil/* return t; */}
 
 template_preproc
   <- "{{" nl_comment_space*
-    template_param_value
+    target:template_param_value
     (nl_comment_space* "|"
-                ( ("" {return nil, nil/* return endOffset(); */})
-                    nl_comment_space*
+                r:( ("" {return nil, nil/* return endOffset(); */})
+                    v:nl_comment_space*
                     ("" {return nil, nil/* return endOffset(); */})
                     &("|" / "}}")
-                    {return nil, nil/* return new KV('', tu.flattenIfArray(v), [p0, p0, p0,
+                    {return v, nil/* return new KV('', tu.flattenIfArray(v), [p0, p0, p0,
                     p]);*/
                     } // empty argument
                     / template_param
-                  ) {return nil, nil/* return r; */}
+                  ) {return r, nil/* return r; */}
             )*
     nl_comment_space*
-    inline_breaks "}}" {return nil, nil
+    inline_breaks "}}" {return target, nil
     /*
 // Insert target as first positional attribute, so that it can be
 // generically expanded. The TemplateHandler then needs to shift it out
@@ -694,15 +700,15 @@ template_preproc
     } / ("{{" space_or_newline* "}}")
 
 tplarg
-  <- ("" {return nil, nil /*return stops.push('preproc', / * {{ * /"}}"); */})
-    (tplarg_preproc / &{return false, nil  /*return stops.popTo('preproc', stopLen); */} )
-    {return nil, nil/* stops.popTo('preproc', stopLen); return t; */}
+  <- //("" {return nil, nil /*return stops.push('preproc', / * {{ * /"}}"); */})
+    t:(tplarg_preproc / &{return false, nil  /*return stops.popTo('preproc', stopLen); */} )
+    {return t, nil/* stops.popTo('preproc', stopLen); return t; */}
 
 tplarg_preproc
   <- "{{{"
-    ("" {return nil, nil/* return endOffset(); */})
-    template_param_value?
-    (nl_comment_space* "|"
+    //("" {return nil, nil/* return endOffset(); */})
+    target:template_param_value?
+    params:(nl_comment_space* "|"
                 ( ("" {return nil, nil/* return endOffset(); */})
                     nl_comment_space*
                     ("" {return nil, nil/* return endOffset(); */})
@@ -712,7 +718,7 @@ tplarg_preproc
                   ) {return nil, nil/* return r; */}
             )*
     nl_comment_space*
-    inline_breaks "}}}" {return nil, nil
+    inline_breaks "}}}" {return concat(target, params), nil
     /*
       params = params.map(function(o) {
         var s = o.srcOffsets;
@@ -730,18 +736,18 @@ tplarg_preproc
 
 template_param
   <- template_param_name
-    (
-        ("" {return nil, nil/* return endOffset(); */})
+    val:(
+        //("" {return nil, nil/* return endOffset(); */})
         optionalSpaceToken
         "="
-        ("" {return nil, nil/* return endOffset(); */})
+        //("" {return nil, nil/* return endOffset(); */})
         optionalSpaceToken
-        template_param_value? {return nil, nil
+        tpv:template_param_value? {return tpv, nil
         /*
             return { kEndPos: kEndPos, vStartPos: vStartPos, value: (tpv && tpv.tokens) || [] };
             */
         }
-    )? {return nil, nil
+    )? {return val, nil
     /*
       if (val !== null) {
           if (val.value !== null) {
@@ -762,30 +768,44 @@ template_param
   }
 
 template_param_name
-  <- & {return false, nil /*return stops.push('equal', true); */}
-    (template_param_text / &'=' {return "", nil/* return ''; */})
-    {return nil, nil
+  <- & {
+  push(c, "equal", true)
+  return true, nil /*return stops.push('equal', true); */}
+    tpt:(template_param_text / &'=' {return "", nil/* return ''; */})
+    {
+    pop(c, "equal")
+    return tpt, nil
     /*
         stops.pop('equal');
         return tpt;
         */
     }
 
-  / & {return false, nil/* return stops.pop('equal'); */}
+  / & {
+  return pop(c, "equal").(bool), nil/* return stops.pop('equal'); */}
 
 template_param_value
-  <- & {return false, nil /*return stops.push('equal', false); */}
-    template_param_text
-    {return nil, nil
+  <- & {
+  push(c, "equal", false)
+  return true, nil /*return stops.push('equal', false); */}
+    tpt:template_param_text
+    {
+    pop(c, "equal")
+    return tpt, nil
     /*
         stops.pop('equal');
         return { tokens: tpt, srcOffsets: tsrOffsets() };
         */
     }
-  / & {return false, nil /* return stops.pop('equal'); */}
+  / & {return pop(c, "equal").(bool), nil /* return stops.pop('equal'); */}
 
 template_param_text
-  <- & {return false, nil
+  <- & {
+  push(c, "table", false)
+  push(c, "extlink", false)
+  push(c, "templateArg", true)
+  push(c, "tableCellArg", false)
+  return inc(c, "template")
   /*
   // re-enable tables within template parameters
         stops.push('table', false);
@@ -795,7 +815,13 @@ template_param_text
         return stops.inc('template');
         */
     }
-    (nested_block / newlineToken)+ {return nil, nil
+    il:(nested_block / newlineToken)+ {
+    pop(c, "table")
+    pop(c, "extlink")
+    pop(c, "templateArg")
+    pop(c, "tableCellArg")
+    dec(c, "template")
+    return il, nil
     /*
         stops.pop('table');
         stops.pop('extlink');
@@ -811,14 +837,19 @@ template_param_text
         return r;
         */
     }
-  / & {return false, nil
+  / & {
+    pop(c, "table")
+    pop(c, "extlink")
+    pop(c, "templateArg")
+    pop(c, "tableCellArg")
+    return dec(c, "template")
   /*
-  stops.pop('table');
-        stops.pop('extlink');
-        stops.pop('templateArg');
-        stops.pop('tableCellArg');
-        return stops.dec('template');
-        */
+    stops.pop('table');
+    stops.pop('extlink');
+    stops.pop('templateArg');
+    stops.pop('tableCellArg');
+    return stops.dec('template');
+   */
     }
 
 //// Language converter block markup of language variants: -{ ... }-
@@ -829,27 +860,27 @@ template_param_text
 // -{{{{ is (since {{{ has precedence over {{).
 
 lang_variant_or_tpl
-  <- &("-{" &("{{{"+ !'{') tplarg) lang_variant {return nil, nil/* return a; */}
-  / ('-' &("{{{"+ !'{')) tplarg {return nil, nil /*return [a].concat(b);*/ }
-  / ('-' &("{{" "{{{"* !'{')) template {return nil, nil/* return [a].concat(b); */}
-  / &"-{" lang_variant {return nil, nil /*return a; */}
+  <- &("-{" &("{{{"+ !'{') tplarg) a:lang_variant {return a, nil/* return a; */}
+  / a:('-' &("{{{"+ !'{')) b:tplarg {return concat(a, b), nil /*return [a].concat(b);*/ }
+  / a:('-' &("{{" "{{{"* !'{')) b:template {return concat(a, b), nil/* return [a].concat(b); */}
+  / &"-{" a:lang_variant {return a, nil /*return a; */}
 
 broken_lang_variant
   <- &{return true, nil  /*return stops.push('preproc', 'broken'); */}
 // for broken-lang-variant, deliberately fail to pop the stops stack
-    "-{" {return nil, nil /*return r; */}
+    r:"-{" {return r, nil /*return r; */}
 
 lang_variant
   <- ("" {return nil, nil /*return stops.push('preproc', /* -{ * / '}-'); */})
-    (lang_variant_preproc / &{return true, nil  /*return stops.popTo('preproc', stopLen); */})
-    {return nil, nil /*stops.popTo('preproc', stopLen); return lv; */}
+    lv:(lang_variant_preproc / &{return true, nil  /*return stops.popTo('preproc', stopLen); */})
+    {return lv, nil /*stops.popTo('preproc', stopLen); return lv; */}
   / broken_lang_variant
 
 lang_variant_preproc
   <- ("-{" {return nil, nil/* return startOffset(); */})
     (
        &{return true, nil /* return env.langConverterEnabled(); */}
-       opt_lang_variant_flags {return nil, nil
+       ff:opt_lang_variant_flags {return ff, nil
        /*
 // Avoid mutating cached expression results
          ff = Util.clone(ff, true);
@@ -871,12 +902,12 @@ lang_variant_preproc
        }
     )
     (
-      &{return true, nil  /*return f.raw; */} lang_variant_text {return nil, nil/* return [{ text: lv }]; */}
+      &{return true, nil  /*return f.raw; */} lv:lang_variant_text {return lv, nil/* return [{ text: lv }]; */}
       /
-      &{return true, nil /* return !f.raw; */} lang_variant_option_list {return nil, nil/* return lv; */}
+      &{return true, nil /* return !f.raw; */} lv:lang_variant_option_list {return lv, nil/* return lv; */}
     )
     inline_breaks
-    ("}-" {return nil, nil/* return endOffset(); */}) {return nil, nil
+    ("}-" {return nil, nil/* return endOffset(); */}) {return "TODO lang_variant_preproc", nil
     /*
 
       if (!env.langConverterEnabled()) {
@@ -917,7 +948,7 @@ lang_variant_preproc
     }
 
 opt_lang_variant_flags
-  <- ( lang_variant_flags "|" {return nil, nil/* return ff; */} )? {return nil, nil
+  <- f:( ff:lang_variant_flags "|" {return ff, nil/* return ff; */} )? {return f, nil
   /*
 // Collect & separate flags and variants into a set and ordered list
     var flags = new Set();
@@ -1118,13 +1149,13 @@ wikilink
 // (See full explanation above broken_template production.)
 broken_wikilink
   <- &"[[" &{return true, nil /* return stops.push('preproc', 'broken'); */}
-    ("[" (extlink / "[")) {return nil, nil/* return a; */}
+    a:("[" (extlink / "[")) {return a, nil/* return a; */}
 
 wikilink_preproc
   <- "[["
-    wikilink_preprocessor_text?
-    ("" {return nil, nil/* return endOffset(); */})
-    wikilink_content
+    target:wikilink_preprocessor_text?
+    //("" {return nil, nil/* return endOffset(); */})
+    lcs:wikilink_content
     inline_breaks "]]"
   {return nil, nil
   /*
@@ -1160,29 +1191,29 @@ wikilink_preproc
 
 // Tables are allowed inside image captions.
 link_text
-  <- & {return false, nil
-  /*
-// Suppress the flag temporarily in this rule to consume the '=' here.
-      stops.push('equal', false);
-      return stops.push('linkdesc', true);
-      */
+  <- & {
+      // Suppress the flag temporarily in this rule to consume the '=' here.
+      push(c, "equal", false)
+      push(c, "linkdesc", true)
+      return true, nil
     }
-    (  // This group is similar to "block_line" but "list_item"
-// is omitted since `doBlockLevels` happens after
-// `replaceInternalLinks2`, where newlines are stripped.
+    c1:(  // This group is similar to "block_line" but "list_item"
+         // is omitted since `doBlockLevels` happens after
+         // `replaceInternalLinks2`, where newlines are stripped.
          (sol (heading / hr / full_table_in_link_caption))
        / urltext
        / (!inline_breaks
-          ( inline_element / '[' text_char+ ']' (&(!']' / "]]")) / . ) {return nil, nil /*return r;*/ }
+          r:( inline_element / '[' text_char+ ']' (&(!']' / "]]")) / . ) {return r, nil}
          )
-    )+ {return nil, nil
-    /*
-      stops.pop('equal');
-      stops.pop('linkdesc');
-      return tu.flattenStringlist(c);
-      */
+    )+ {
+      pop(c, "equal")
+      pop(c, "linkdesc")
+      return c1, nil
     }
-    / & {return false, nil /*stops.pop('equal'); return stops.pop('linkdesc'); */}
+    / & {
+      pop(c, "equal")
+      return pop(c, "linkdesc").(bool), nil
+    }
 
 // Generic quote rule for italic and bold, further processed in a token
 // stream transformation in doQuotes. Relies on NlTk tokens being emitted
@@ -1229,12 +1260,12 @@ extension_tag <-
 
 nowiki
   <- extension_tag
-    &{return true, nil /* return extToken.getAttribute('name') === 'nowiki'; */}
+    &{return false, nil /* return extToken.getAttribute('name') === 'nowiki'; */}
     {return nil, nil/* return extToken; */}
 
 // Used by nowiki extension to tokenize html entities.
 nowiki_content
-  <- (htmlentity / .)* {return nil, nil/* return tu.flattenIfArray(c); */}
+  <- c2:(htmlentity / .)* {return c2, nil/* return tu.flattenIfArray(c); */}
 
 // Used by lang_variant productions to protect special language names or
 // conversion strings.
@@ -1317,17 +1348,18 @@ xmlish_tag
 // following paragraphs.
 //
 block_tag
-  <- & { return true, nil
-  /*
-// By the time we get to `doTableStuff` in the php parser, we've already
-// safely encoded element attributes. See 55313f4e in core.
-      stops.push('table', false);
-      stops.push('tableCellArg', false);
-      return true;
-      */
+  <- & {
+      // By the time we get to `doTableStuff` in the php parser, we've already
+      // safely encoded element attributes. See 55313f4e in core.
+      push(c, "table", false)
+      push(c, "tableCellArg", false)
+      return true, nil
     }
     "<" "/"?
-    (tag_name & {return false, nil}
+    (tag_name & {
+      push(c, "extTag", false)
+      return false, nil
+    }
     //#/*
     //#  return isXMLTag(tn, true);  // NOTE: 'extTag' stop was pushed.
     //#  */
@@ -1336,7 +1368,11 @@ block_tag
     generic_newline_attributes
     space_or_newline*
     "/"?
-    ">" {return nil, nil
+    ">" {
+      pop(c, "table")
+      pop(c, "tableCellArg")
+      pop(c, "extTag")
+      return nil, nil
     /*
       stops.pop('table');
       stops.pop('tableCellArg');
@@ -1345,8 +1381,13 @@ block_tag
       return [maybeExtensionTag(t)];
       */
     }
-    / "<" "/"? tag_name & {return false, nil/* return stops.pop('extTag'); */}
-    / & {return false, nil/* stops.pop('table'); return stops.pop('tableCellArg'); */}
+    / "<" "/"? tag_name & {
+      return pop(c, "extTag").(bool), nil
+    }
+    / & {
+      pop(c, "table")
+      return pop(c, "tableCellArg").(bool), nil
+    }
 
 // A generic attribute that can span multiple lines.
 generic_newline_attribute
@@ -2094,15 +2135,13 @@ include_limits <-
 
 // Start of file
 sof <- & {
-log.Println("SOF", c.pos.offset)
-return c.pos.offset == 0, nil /*return endOffset() === 0 && !options.pipelineOffset; */}
+  return c.pos.offset == 0, nil
+}
 
 // End of file
 eof <- & {
   len := c.globalStore["len"].(int)
-  log.Println("eof", c.pos, len)
   return c.pos.offset == len, nil
-  /* return endOffset() === input.length; */
 }
 
 newline <- '\n' / "\r\n"
@@ -2119,16 +2158,16 @@ directive
   <- comment
   / extension_tag
   / tplarg_or_template
-  / & "-{" lang_variant_or_tpl {return nil, nil/* return v; */}
-  / & "&" htmlentity {return nil, nil/* return e; */}
+  / & "-{" v:lang_variant_or_tpl {return v, nil/* return v; */}
+  / & "&" e:htmlentity {return e, nil/* return e; */}
   / include_limits
 
 wikilink_preprocessor_text
-  <- ( [^<[{\n\r\t|!\]}{ &-]+
+  <- r:( [^<[{\n\r\t|!\]}{ &-]+
 // XXX gwicke: any more chars we need to allow here?
-        / !inline_breaks ( directive / ( !"]]" ( text_char / [!<-}\]\n\r] ) ) )
-        {return nil, nil/* return wr; */}
-    )+ {return nil, nil
+        / !inline_breaks wr:( directive / ( !"]]" ( text_char / [!<-}\]\n\r] ) ) )
+        {return wr, nil/* return wr; */}
+    )+ {return r, nil
     /*
       return tu.flattenStringlist(r);
       */
@@ -2144,14 +2183,14 @@ extlink_preprocessor_text
     return stops.push('linkdesc', false);
     */
   }
-  ( [^'<~[{\n\r|!\]}-\t&="' \u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]+
-  / !inline_breaks ( directive / no_punctuation_char / [&|{-] ) {return nil, nil/* return s;
+  r:( [^'<~[{\n\r|!\]}-\t&="' \u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]+
+  / !inline_breaks s:( directive / no_punctuation_char / [&|{-] ) {return s, nil/* return s;
   */}
 /// urlencoded_char
 // !inline_breaks no_punctuation_char
   / ([.:,] !(space / eolf))
   / (['] ![']) // single quotes are ok, double quotes are bad
-  )+ {return nil, nil
+  )+ {return r, nil
   /*
       stops.pop('linkdesc');
       return tu.flattenString(r);
@@ -2167,11 +2206,11 @@ extlink_preprocessor_text
 
 // The stop set is space_or_newline and > which matches generic_att_value.
 attribute_preprocessor_text
-  <- ( [^{}&<-|/ \t\n\r\x0c>]+
+  <- r:( [^{}&<-|/ \t\n\r\x0c>]+
   / !inline_breaks
     !"/>"
-    ( directive / [{}&<-|/] ) {return nil, nil /*return s; */}
-  )+ {return nil, nil
+    s:( directive / [{}&<-|/] ) {return s, nil /*return s; */}
+  )+ {return r, nil
   /*
     return tu.flattenString(r);
     */
@@ -2179,11 +2218,11 @@ attribute_preprocessor_text
 
 // The stop set is '> which matches generic_att_value.
 attribute_preprocessor_text_single
-  <- ( [^{}&<-|/'>]+
+  <- r:( [^{}&<-|/'>]+
   / !inline_breaks
     !"/>"
-    ( directive / [{}&<-|/] ) {return nil, nil/* return s; */}
-  )* {return nil, nil
+    s:( directive / [{}&<-|/] ) {return s, nil/* return s; */}
+  )* {return r, nil
   /*
     return tu.flattenString(r);
     */
@@ -2191,11 +2230,11 @@ attribute_preprocessor_text_single
 
 // The stop set is "> which matches generic_att_value.
 attribute_preprocessor_text_double
-  <- ( [^{}&<-|/">]+
+  <- r:( [^{}&<-|/">]+
   / !inline_breaks
     !"/>"
-    ( directive / [{}&<-|/] ) {return nil, nil/* return s; */}
-  )* {return nil, nil
+    s:( directive / [{}&<-|/] ) {return s, nil/* return s; */}
+  )* {return r, nil
   /*
     return tu.flattenString(r);
     */
@@ -2211,9 +2250,9 @@ attribute_preprocessor_text_double
 
 // The stop set is space_or_newline and | which matches table_att_value.
 table_attribute_preprocessor_text
-  <- ( [^{}&<-![ \t\n\r\x0c|]+
-  / !inline_breaks ( directive / [{}&<-![] ) {return nil, nil/* return s; */}
-  )+ {return nil, nil
+  <- r:( [^{}&<-![ \t\n\r\x0c|]+
+  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  )+ {return r, nil
   /*
     return tu.flattenString(r);
     */
@@ -2221,9 +2260,9 @@ table_attribute_preprocessor_text
 
 // The stop set is '\r\n| which matches table_att_value.
 table_attribute_preprocessor_text_single
-  <- ( [^{}&<-!['\r\n|]+
-  / !inline_breaks ( directive / [{}&<-![] ) {return nil, nil/* return s; */}
-  )* {return nil, nil
+  <- r:( [^{}&<-!['\r\n|]+
+  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  )* {return r, nil
   /*
     return tu.flattenString(r);
     */
@@ -2231,9 +2270,9 @@ table_attribute_preprocessor_text_single
 
 // The stop set is "\r\n| which matches table_att_value.
 table_attribute_preprocessor_text_double
-  <- ( [^{}&<-!["\r\n|]+
-  / !inline_breaks ( directive / [{}&<-![] ) {return nil, nil/* return s; */}
-  )* {return nil, nil
+  <- r:( [^{}&<-!["\r\n|]+
+  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  )* {return r, nil
   /*
     return tu.flattenString(r);
     */

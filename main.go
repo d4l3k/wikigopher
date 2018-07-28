@@ -216,6 +216,13 @@ func main() {
 		mu.Lock()
 		defer mu.Unlock()
 
+		if articleName == "Special:Random" {
+			for name := range mu.offsets {
+				http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
+				return
+			}
+		}
+
 		articleMeta, ok := mu.offsets[articleName]
 		if !ok {
 			http.Error(w, "article not found", http.StatusNotFound)
