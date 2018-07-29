@@ -12,6 +12,9 @@ start <- tlb:tlb* newlineToken* {
     Type: html.DocumentNode,
   }
   addChild(n, tlb)
+  if len(c.state) > 0 {
+    panic(errors.Errorf("poluted state! %#v", c.state))
+  }
   return n, nil
 }
 
@@ -142,7 +145,11 @@ nested_block_in_table
         return b;
         */
     }
-  / & {return pop(c, "tableDataBlock").(bool), nil /*return stops.pop('tableDataBlock');*/ }
+  / & {
+    pop(c, "tableDataBlock")
+    return false, nil
+    /*return stops.pop('tableDataBlock');*/
+  }
 
 
 // Line-based block constructs.
@@ -218,19 +225,12 @@ br <- optionalSpaceToken &newline {
     */
 }
 
-inline_breaks
-  <- & {return inlineBreaks(c) /*return inlineBreaks(input, endOffset(), stops); */}
+inline_breaks <- & { return inlineBreaks(c) }
 
 inlineline
-  <- c2:(urltext
-          / !inline_breaks
-            r:(inline_element / [^\r\n]) {return r, nil /*return r;*/ })+
-            {
-            return concat(c2), nil
-            /*
-      return tu.flattenStringlist(c);
-      */
-  }
+  <- (urltext
+    / (!inline_breaks
+    r:(inline_element / [^\r\n]) {return r, nil}))+
 
 inline_element
   <- & '<' r:( xmlish_tag
@@ -256,10 +256,14 @@ heading <- & "=" // guard, to make sure '='+ will match.
      & { return inc(c, "h") /*return stops.inc('h');*/ }
      s:'='+ // moved in here to make s accessible to inner action
      ce:(
-       (ill:inlineline?)
+       // TODO: figure out why inlineline isn't sufficient here.
+       (ill:(urltext? / inlineline?))
        '='+ {return ill, nil}
      )?
-     & {return ce!=nil || len(concat(s)) > 2, nil /*return ce || s.length > 2;*/ }
+     & {
+       return ce!=nil || len(concat(s)) > 2, nil
+       /*return ce || s.length > 2;*/
+     }
      //("" {return nil, nil /*return endOffset();*/ })
      spc:(spaces / comment)*
      &eolf
@@ -334,7 +338,11 @@ heading <- & "=" // guard, to make sure '='+ will match.
 // for further details.
 
 comment
-    <- "<!--" (!"-->" .)* ("-->" / eof) {return "comment", nil
+    <- "<!--" c1:(!"-->" .)* ("-->" / eof) {
+      return &html.Node{
+      Type: html.CommentNode,
+      Data: concat(c1),
+      }, nil
     /*
         var data = DU.encodeComment(c);
         return [new CommentTk(data, { tsr: tsrOffsets() })];
@@ -620,7 +628,9 @@ tplarg_or_template_guarded
       / a:('{' &("{{{"+ !'{'))? b:tplarg {return concat(a, b), nil /*return [a].concat(b);*/ }
       / a:('{' &("{{" !'{'))? b:template {return concat(a, b), nil /*return [a].concat(b);*/ }
       / a:broken_template {return a, nil /*return a;*/ }
-    ) {return r, nil
+    ) {
+    dec(c, "templatedepth")
+    return r, nil
     /*
       stops.dec('templatedepth');
       return r;
@@ -629,11 +639,15 @@ tplarg_or_template_guarded
     / & {return dec(c, "templatedepth") /*return stops.dec('templatedepth');*/ }
 
 tplarg_or_template_or_bust
-    <- r:(tplarg_or_template / .)+ {return r, nil /*return tu.flattenIfArray(r); */}
+    <- (tplarg_or_template / .)+
 
 template
-  <- ("" {return nil, nil/* return stops.push('preproc', / * {{ * /"}}"); */})
-    t:( template_preproc / &{return false, nil/* return stops.popTo('preproc', stopLen); */} )
+  <- ("" {
+      push(c, "preproc", /*{{*/ "}}")
+      return nil, nil
+      /* return stops.push('preproc', / * {{ * /"}}"); */
+    })
+    t:template_preproc
     {return t, nil/* stops.popTo('preproc', stopLen); return t; */}
 
 // The PHP preprocessor maintains a single stack of "closing token we
@@ -782,7 +796,10 @@ template_param_name
     }
 
   / & {
-  return pop(c, "equal").(bool), nil/* return stops.pop('equal'); */}
+    pop(c, "equal")
+    return false, nil
+    /* return stops.pop('equal'); */
+  }
 
 template_param_value
   <- & {
@@ -797,7 +814,11 @@ template_param_value
         return { tokens: tpt, srcOffsets: tsrOffsets() };
         */
     }
-  / & {return pop(c, "equal").(bool), nil /* return stops.pop('equal'); */}
+  / & {
+    pop(c, "equal")
+    return false, nil
+    /* return stops.pop('equal'); */
+  }
 
 template_param_text
   <- & {
@@ -872,14 +893,14 @@ broken_lang_variant
 
 lang_variant
   <- ("" {return nil, nil /*return stops.push('preproc', /* -{ * / '}-'); */})
-    lv:(lang_variant_preproc / &{return true, nil  /*return stops.popTo('preproc', stopLen); */})
+    lv:(lang_variant_preproc / &{return false, nil  /*return stops.popTo('preproc', stopLen); */})
     {return lv, nil /*stops.popTo('preproc', stopLen); return lv; */}
   / broken_lang_variant
 
 lang_variant_preproc
   <- ("-{" {return nil, nil/* return startOffset(); */})
     (
-       &{return true, nil /* return env.langConverterEnabled(); */}
+       &{return false, nil /* return env.langConverterEnabled(); */}
        ff:opt_lang_variant_flags {return ff, nil
        /*
 // Avoid mutating cached expression results
@@ -893,7 +914,7 @@ lang_variant_preproc
          return ff;
          */
        } /
-       &{return true, nil  /*return !env.langConverterEnabled(); */}
+       &{return false, nil  /*return !env.langConverterEnabled(); */}
        "" {return nil, nil
        /*
 // if language converter not enabled, don't try to parse inside.
@@ -902,9 +923,9 @@ lang_variant_preproc
        }
     )
     (
-      &{return true, nil  /*return f.raw; */} lv:lang_variant_text {return lv, nil/* return [{ text: lv }]; */}
+      &{return false, nil  /*return f.raw; */} lv:lang_variant_text {return lv, nil/* return [{ text: lv }]; */}
       /
-      &{return true, nil /* return !f.raw; */} lv:lang_variant_option_list {return lv, nil/* return lv; */}
+      &{return false, nil /* return !f.raw; */} lv:lang_variant_option_list {return lv, nil/* return lv; */}
     )
     inline_breaks
     ("}-" {return nil, nil/* return endOffset(); */}) {return "TODO lang_variant_preproc", nil
@@ -1137,18 +1158,18 @@ wikilink_content
         */
   } )*
 
-wikilink
-  <- ("" {return nil, nil /*return stops.push('preproc', "]]");*/ })
-    (wikilink_preproc / &{return true, nil  /*return stops.popTo('preproc', stopLen);*/ })
-    {return nil, nil/* stops.popTo('preproc', stopLen); return w; */}
-  / broken_wikilink
+wikilink <- wikilink_preproc / broken_wikilink
 
 // `broken-link` (see [[:mw:Preprocessor_ABNF]]), but careful because the
 // second bracket could start an extlink.  Deliberately leave entry
 // on preproc stack since we haven't seen a double-close bracket.
 // (See full explanation above broken_template production.)
 broken_wikilink
-  <- &"[[" &{return true, nil /* return stops.push('preproc', 'broken'); */}
+  <- &"[[" &{
+      push(c, "preproc", "broken")
+      return true, nil
+      /* return stops.push('preproc', 'broken'); */
+    }
     a:("[" (extlink / "[")) {return a, nil/* return a; */}
 
 wikilink_preproc
@@ -1157,7 +1178,7 @@ wikilink_preproc
     //("" {return nil, nil/* return endOffset(); */})
     lcs:wikilink_content
     inline_breaks "]]"
-  {return nil, nil
+  {return lcs, nil
   /*
       var pipeTrick = (lcs.length === 1 && lcs[0].v === null);
       var textTokens = [];
@@ -1212,7 +1233,8 @@ link_text
     }
     / & {
       pop(c, "equal")
-      return pop(c, "linkdesc").(bool), nil
+      pop(c, "linkdesc")
+      return false, nil
     }
 
 // Generic quote rule for italic and bold, further processed in a token
@@ -1252,10 +1274,10 @@ quote <- ("''" "'"*) {return nil, nil
 // *********************************************************/
 
 extension_tag <-
-  &{return true, nil  /*return !stops.onStack('extTag'); */}
+  &{return false, nil  /*return !stops.onStack('extTag'); */}
   xmlish_tag
 // Account for `maybeExtensionTag` returning unmatched start / end tags
-  &{return true, nil /* return extToken.name === 'extension'; */}
+  &{return false, nil /* return extToken.name === 'extension'; */}
   {return nil, nil/* return extToken; */}
 
 nowiki
@@ -1382,11 +1404,13 @@ block_tag
       */
     }
     / "<" "/"? tag_name & {
-      return pop(c, "extTag").(bool), nil
+      pop(c, "extTag")
+      return false, nil
     }
     / & {
       pop(c, "table")
-      return pop(c, "tableCellArg").(bool), nil
+      pop(c, "tableCellArg")
+      return false, nil
     }
 
 // A generic attribute that can span multiple lines.
@@ -1935,12 +1959,12 @@ text_char <- [^-'<~[{\n\r:;\]}|!=]
 //
 
 urltext <- ( [^-'<~[{\n/A-Za-z_|!:;\]} &=]+
-          / & [/A-Za-z] autolink {return nil, nil /*return al;*/ }
-          / & "&" htmlentity {return nil, nil /*return he;*/ }
+          / & [/A-Za-z] al:autolink {return al, nil /*return al;*/ }
+          / & "&" he:htmlentity {return he, nil /*return he;*/ }
 // Convert trailing space into &nbsp;
 // XXX: This should be moved to a serializer
 // This is a hack to force a whitespace display before the colon
-          / ' ' & ':' {return nil, nil
+          / ' ' & ':' {return "&nbsp;", nil
           /*
               var toks = Util.placeholder('\u00a0', {
                  ' ',
@@ -1952,7 +1976,7 @@ urltext <- ( [^-'<~[{\n/A-Za-z_|!:;\]} &=]+
               return toks;
               */
           }
-          / & ("__") behavior_switch {return nil, nil /*return bs;*/ }
+          / & ("__") bs:behavior_switch {return bs, nil /*return bs;*/ }
 // About 96% of text_char calls originate here.
 // pegjs 0.8 inlines this simple rule automatically.
           / text_char )+
@@ -2023,24 +2047,35 @@ optionalNewlines
   <- ([\n\r\t ] &[\n\r])*
 
 comment_or_includes <- (comment / (
-    ( & {return false, nil /*return stops.push("sol_il", true);*/ }
+    ( & {
+      push(c, "sol_il", true)
+      return true, nil
+    }
       i:include_limits
-      & {return false, nil /*stops.pop("sol_il"); return true;*/ }
-    ) {return i, nil /*return i;*/ }
-    / & {return false, nil /*return stops.pop("sol_il");*/ }
+      & {
+        //pop(c, "sol_il")
+        return true, nil
+      }
+    ) {return i, nil}
+    / & {
+      //pop(c, "sol_il")
+      return false, nil
+    }
   ))*
 
 sol <- (empty_line_with_comments / sol_prefix) comment_or_includes
 
 sol_prefix
   <- newlineToken
-  / & {return c.pos.col == 0, nil
+  / & {
+  //log.Printf("sol_prefix %v", c.pos)
+  return c.pos.offset == 0, nil
   /*
 // Use the sol flag only at the start of the input
 // NOTE: Explicitly check for 'false' and not a falsy value
       return endOffset() === 0 && options.sol !== false;
       */
-  } {return "sol_prefix", nil /*return [];*/ }
+  } {return nil, nil /*return [];*/ }
 
 empty_line_with_comments
   <- sol_prefix ("" {return "empty_line_with_comments", nil /*return endOffset();*/ }) (space* comment (space / comment)* newline)+ {return nil, nil

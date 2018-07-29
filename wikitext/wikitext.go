@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
 	"golang.org/x/net/html"
 )
@@ -17,7 +16,7 @@ import (
 func Convert(text []byte) ([]byte, error) {
 	v, err := Parse(
 		"file.wikitext",
-		text,
+		append(text, '\n'),
 		GlobalStore("len", len(text)),
 		GlobalStore("text", text),
 		//Memoize(true),
@@ -28,7 +27,7 @@ func Convert(text []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	spew.Dump(v)
+	//spew.Dump(v)
 
 	var doc *html.Node
 
@@ -50,7 +49,7 @@ func Convert(text []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return buf.Bytes(), nil
+	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 func concat(fields ...interface{}) string {
@@ -126,22 +125,46 @@ func count(c *current, tag string) int {
 	return v
 }
 
-func push(c *current, tag string, val interface{}) {
-	v, _ := c.state[tag].([]interface{})
-	v = append(v, val)
-	c.state[tag] = v
+type stack []interface{}
+
+func (s stack) Clone() interface{} {
+	log.Printf("clone!")
+	out := make(stack, len(s))
+	for k, v := range s {
+		if c, ok := v.(Cloner); ok {
+			out[k] = c.Clone()
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
-func pop(c *current, tag string) interface{} {
-	v, _ := c.state[tag].([]interface{})
+var _ Cloner = stack{}
+
+func push(c *current, tag string, val interface{}) int {
+	v, _ := c.state[tag].(stack)
+	v = append(v, val)
+	c.state[tag] = v
+	return len(v)
+}
+
+func pop(c *current, tag string) {
+	v, _ := c.state[tag].(stack)
 	if len(v) > 0 {
 		c.state[tag] = v[:len(v)-1]
 	}
-	return false
+}
+
+func popTo(c *current, tag string, n int) {
+	v, _ := c.state[tag].(stack)
+	if len(v) > n {
+		c.state[tag] = v[:n]
+	}
 }
 
 func peek(c *current, tag string) interface{} {
-	v, _ := c.state[tag].([]interface{})
+	v, _ := c.state[tag].(stack)
 	if len(v) == 0 {
 		return nil
 	}
@@ -220,10 +243,12 @@ func inlineBreaks(c *current) (bool, error) {
 			!(peek(c, "preproc").(string) == "}-"), nil
 
 	case ';':
-		return peek(c, "semicolon").(bool), nil
+		semicolon, _ := peek(c, "semicolon").(bool)
+		return semicolon, nil
 
 	case '\r':
-		return peek(c, "table").(bool) && match(`\r\n?\s*[!|]`, input[pos:]), nil
+		table, _ := peek(c, "table").(bool)
+		return table && match(`\r\n?\s*[!|]`, input[pos:]), nil
 
 	case '\n':
 		// The code below is just a manual / efficient
@@ -259,18 +284,22 @@ func inlineBreaks(c *current) (bool, error) {
 		// This is a special case in php's doTableStuff, added in
 		// response to T2553.  If it encounters a `[[`, it bails on
 		// parsing attributes and interprets it all as content.
-		return peek(c, "tableCellArg").(bool) && string(input[pos:pos+2]) == "[[", nil
+		tableCellArg, _ := peek(c, "tableCellArg").(bool)
+		return tableCellArg && string(input[pos:pos+2]) == "[[", nil
 
 	case '-':
 		// Same as above: a special case in doTableStuff, added
 		// as part of T153140
-		return peek(c, "tableCellArg").(bool) && string(input[pos:pos+2]) == "-{", nil
+		tableCellArg, _ := peek(c, "tableCellArg").(bool)
+		return tableCellArg && string(input[pos:pos+2]) == "-{", nil
 
 	case ']':
-		if peek(c, "extlink").(bool) {
+		extlink, _ := peek(c, "extlink").(bool)
+		if extlink {
 			return true, nil
 		}
-		return string(input[pos:pos+2]) == peek(c, "preproc").(string), nil
+		preproc, _ := peek(c, "preproc").(string)
+		return string(input[pos:pos+2]) == preproc, nil
 
 	case '<':
 		return (count(c, "noinclude") > 0 && string(input[pos:pos+12]) == "</noinclude>") ||

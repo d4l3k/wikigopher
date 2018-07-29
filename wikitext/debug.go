@@ -18,6 +18,7 @@ func debugExpr(e interface{}, compute bool) {
 		oldRun := e.run
 		name := getFunctionName(e.run)
 		e.run = func(p *parser) (interface{}, error) {
+			log.Printf("run %q", name)
 			stack := p.vstack[len(p.vstack)-1]
 			r := debugRun{
 				Name:  name,
