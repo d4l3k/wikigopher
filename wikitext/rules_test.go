@@ -31,6 +31,11 @@ func TestRules(t *testing.T) {
 			"[[a|b]]",
 			`<a href="a">b</a>`,
 		},
+		{
+			"template",
+			"{{reflink}}",
+			"",
+		},
 	}
 
 	for _, c := range cases {

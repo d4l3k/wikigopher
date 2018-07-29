@@ -54,7 +54,7 @@ func TestConvert(t *testing.T) {
 		},
 		{
 			"{{reflink}}\n\nBlah",
-			"<p>Blah</p>",
+			"<p></p><p>Blah</p>",
 		},
 		{
 			"[[Jordanstown]]",
@@ -72,7 +72,7 @@ func TestConvert(t *testing.T) {
 | logo =
 | arena = [[Ulster University]] Sports Centre
 }}`,
-			"",
+			"<p></p>",
 		},
 	}
 

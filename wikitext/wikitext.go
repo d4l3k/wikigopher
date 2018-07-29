@@ -74,7 +74,10 @@ func concat(fields ...interface{}) string {
 			if err := html.Render(&buf, f); err != nil {
 				panic(err)
 			}
-			return buf.String()
+			b.Write(buf.Bytes())
+
+		case debugRun:
+			b.WriteString(concat(f.Value))
 
 		default:
 			panic(errors.Errorf("concat: unsupported f type %T: %+v", f, f))
@@ -143,7 +146,6 @@ func count(c *current, tag string) int {
 type stack []interface{}
 
 func (s stack) Clone() interface{} {
-	log.Printf("clone!")
 	out := make(stack, len(s))
 	for k, v := range s {
 		if c, ok := v.(Cloner); ok {
@@ -161,24 +163,31 @@ func push(c *current, tag string, val interface{}) int {
 	v, _ := c.state[tag].(stack)
 	v = append(v, val)
 	c.state[tag] = v
-	return len(v)
+	return len(v) - 1
 }
 
-func pop(c *current, tag string) {
+func pop(c *current, tag string) interface{} {
 	v, _ := c.state[tag].(stack)
-	if len(v) > 0 {
-		if len(v) == 1 {
-			delete(c.state, tag)
-		} else {
-			c.state[tag] = v[:len(v)-1]
-		}
+	if len(v) == 0 {
+		return nil
 	}
+	val := v[len(v)-1]
+	if len(v) == 1 {
+		delete(c.state, tag)
+	} else {
+		c.state[tag] = v[:len(v)-1]
+	}
+	return val
 }
 
 func popTo(c *current, tag string, n int) {
 	v, _ := c.state[tag].(stack)
 	if len(v) > n {
-		c.state[tag] = v[:n]
+		if n == 0 {
+			delete(c.state, tag)
+		} else {
+			c.state[tag] = v[:n]
+		}
 	}
 }
 
@@ -202,7 +211,7 @@ func match(pattern string, input []byte) bool {
 
 func inlineBreaks(c *current) (bool, error) {
 	pos := c.pos.offset + len(c.text)
-	log.Printf("inlineBreaks %s, %s, pos %d", c.pos, c.text, pos)
+	log.Printf("inlineBreaks %s, %q, pos %d", c.pos, c.text, pos)
 	input := c.globalStore["text"].([]byte)
 	if len(input) <= pos {
 		log.Printf("inlinebreak false")
@@ -255,6 +264,7 @@ func inlineBreaks(c *current) (bool, error) {
 
 	case '}':
 		preproc, _ := peek(c, "preproc").(string)
+		log.Printf("inlineBreaks: } %q %q", preproc, input[pos:pos+2])
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case ':':

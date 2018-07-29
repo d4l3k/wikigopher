@@ -224,9 +224,14 @@ br <- optionalSpaceToken &newline {
 inline_breaks <- & { return inlineBreaks(c) }
 
 inlineline
-  <- (urltext
-    / (!inline_breaks
-    r:(inline_element / [^\r\n]) {return r, nil}))+
+  <- ((r:urltext #{log.Printf("urltext %q", concat(r)); return nil})
+    / inlineline_element)+
+
+inlineline_element
+  <- !inline_breaks
+    r:(inline_element / [^\r\n])
+    #{log.Printf("inline_element: %q", concat(r)); return nil}
+    {return r, nil}
 
 inline_element
   <- & '<' r:( xmlish_tag
@@ -249,7 +254,7 @@ inline_element
 heading <- & "=" // guard, to make sure '='+ will match.
 // XXX: Also check to end to avoid inline parsing?
     r:(
-     & { inc(c, "h"); return true, nil /*return stops.inc('h');*/ }
+     #{ inc(c, "h"); return  nil /*return stops.inc('h');*/ }
      s:'='+ // moved in here to make s accessible to inner action
      ce:(
        // TODO: figure out why inlineline isn't sufficient here.
@@ -263,8 +268,8 @@ heading <- & "=" // guard, to make sure '='+ will match.
      //("" {return nil, nil /*return endOffset();*/ })
      spc:(spaces / comment)*
      &eolf
+     #{dec(c, "h"); return nil}
      {
-     dec(c, "h")
      n := &html.Node{
        Type: html.ElementNode,
        Data: "h"+strconv.Itoa(len(concat(s))),
@@ -317,7 +322,6 @@ heading <- & "=" // guard, to make sure '='+ will match.
         ]);
         */
       }
-    / & {dec(c, "h"); return false, nil /*stops.dec('h'); return false;*/ }
     ) {
     return r, nil /*return r;*/
   }
@@ -619,32 +623,37 @@ tplarg_or_template
     t:tplarg_or_template_guarded {return t, nil /*return t;*/ }
 
 tplarg_or_template_guarded
-  <- &{inc(c, "templatedepth"); return true, nil /* return stops.inc('templatedepth');*/ }
+  <- #{inc(c, "templatedepth"); return nil /* return stops.inc('templatedepth');*/ }
     r:( &("{{" &("{{{"+ !'{') tplarg) a:(template/broken_template) {return a, nil /*return a;*/ }
       / a:('{' &("{{{"+ !'{'))? b:tplarg {return concat(a, b), nil /*return [a].concat(b);*/ }
       / a:('{' &("{{" !'{'))? b:template {return concat(a, b), nil /*return [a].concat(b);*/ }
       / a:broken_template {return a, nil /*return a;*/ }
-    ) {
-    dec(c, "templatedepth")
+    ) #{
+      dec(c, "templatedepth")
+      return nil
+    } {
     return r, nil
     /*
       stops.dec('templatedepth');
       return r;
       */
     }
-    / & {dec(c, "templatedepth"); return false, nil /*return stops.dec('templatedepth');*/ }
 
 tplarg_or_template_or_bust
     <- (tplarg_or_template / .)+
 
 template
-  <- ("" {
-      push(c, "preproc", /*{{*/ "}}")
-      return nil, nil
+  <- #{
+      push(c, "level", push(c, "preproc", /*{{*/ "}}"))
+      return nil
       /* return stops.push('preproc', / * {{ * /"}}"); */
-    })
+    }
     t:template_preproc
-    {return t, nil/* stops.popTo('preproc', stopLen); return t; */}
+    #{
+      popTo(c, "preproc", pop(c, "level").(int))
+      return nil
+    }
+    {return nil, nil/* stops.popTo('preproc', stopLen); return t; */}
 
 // The PHP preprocessor maintains a single stack of "closing token we
 // are currently looking for", with no backtracking.  This means that
@@ -679,17 +688,20 @@ template
 // productions taken which (deliberately) left elements on the preproc stack.
 
 broken_template
-  <- &"{{" &{return false, nil/* return stops.push('preproc', 'broken'); */}
+  <- &"{{" #{push(c, "preproc", "broken"); return nil/* return stops.push('preproc', 'broken'); */}
 // for broken-template,  deliberately fail to pop the preproc stops stack
-    t:"{{" {return t, nil/* return t; */}
+    t:"{{"
+    #{pop(c, "preproc"); return nil}
+    {return t, nil/* return t; */}
 
 template_preproc
   <- "{{" nl_comment_space*
+    &{log.Println("template_preproc", c.text); return true, nil}
     target:template_param_value
+    &{log.Println("template_param_value", concat(c.text)); spew.Dump(target); return true, nil}
     (nl_comment_space* "|"
-                r:( ("" {return nil, nil/* return endOffset(); */})
+                r:(
                     v:nl_comment_space*
-                    ("" {return nil, nil/* return endOffset(); */})
                     &("|" / "}}")
                     {return v, nil/* return new KV('', tu.flattenIfArray(v), [p0, p0, p0,
                     p]);*/
@@ -698,6 +710,7 @@ template_preproc
                   ) {return r, nil/* return r; */}
             )*
     nl_comment_space*
+    &{log.Println("nl_comment_space"); return true, nil}
     inline_breaks "}}" {return target, nil
     /*
 // Insert target as first positional attribute, so that it can be
@@ -798,32 +811,25 @@ template_param_name
   }
 
 template_param_value
-  <- & {
-  push(c, "equal", false)
-  return true, nil /*return stops.push('equal', false); */}
+  <- #{ push(c, "equal", false); return nil }
     tpt:template_param_text
+    #{ pop(c, "equal"); return nil }
     {
-    pop(c, "equal")
     return tpt, nil
     /*
         stops.pop('equal');
         return { tokens: tpt, srcOffsets: tsrOffsets() };
         */
     }
-  / & {
-    pop(c, "equal")
-    return false, nil
-    /* return stops.pop('equal'); */
-  }
 
 template_param_text
-  <- & {
+  <- #{
   push(c, "table", false)
   push(c, "extlink", false)
   push(c, "templateArg", true)
   push(c, "tableCellArg", false)
   inc(c, "template")
-  return true, nil
+  return nil
   /*
   // re-enable tables within template parameters
         stops.push('table', false);
@@ -833,12 +839,15 @@ template_param_text
         return stops.inc('template');
         */
     }
-    il:(nested_block / newlineToken)+ {
-    pop(c, "table")
-    pop(c, "extlink")
-    pop(c, "templateArg")
-    pop(c, "tableCellArg")
-    dec(c, "template")
+    il:(nested_block / newlineToken)+ #{
+      pop(c, "table")
+      pop(c, "extlink")
+      pop(c, "templateArg")
+      pop(c, "tableCellArg")
+      dec(c, "template")
+      return nil
+    }
+    {
     return il, nil
     /*
         stops.pop('table');
@@ -854,21 +863,6 @@ template_param_text
         }
         return r;
         */
-    }
-  / & {
-    pop(c, "table")
-    pop(c, "extlink")
-    pop(c, "templateArg")
-    pop(c, "tableCellArg")
-    dec(c, "template")
-    return false, nil
-  /*
-    stops.pop('table');
-    stops.pop('extlink');
-    stops.pop('templateArg');
-    stops.pop('tableCellArg');
-    return stops.dec('template');
-   */
     }
 
 //// Language converter block markup of language variants: -{ ... }-
