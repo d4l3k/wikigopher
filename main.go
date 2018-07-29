@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/blevesearch/bleve"
 	"github.com/d4l3k/wikigopher/wikitext"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/pkg/errors"
 )
 
@@ -26,6 +28,8 @@ var (
 	searchIndexFile = flag.String("searchIndex", "index.bleve", "the search index file")
 	httpAddr        = flag.String("http", ":8080", "the address to bind HTTP to")
 )
+
+var tmpls = template.Must(template.ParseGlob("templates/*"))
 
 type indexEntry struct {
 	id, seek int
@@ -241,7 +245,16 @@ func main() {
 			http.Error(w, fmt.Sprintf("%+v", err), 500)
 			return
 		}
-		w.Write(body)
+		if err := tmpls.ExecuteTemplate(w, "article.html", struct {
+			Title string
+			Body  template.HTML
+		}{
+			Title: articleName,
+			Body:  template.HTML(bluemonday.UGCPolicy().Sanitize(string(body))),
+		}); err != nil {
+			http.Error(w, fmt.Sprintf("%+v", err), 500)
+			return
+		}
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("todo"))

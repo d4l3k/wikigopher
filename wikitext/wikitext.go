@@ -21,7 +21,7 @@ func Convert(text []byte) ([]byte, error) {
 		GlobalStore("text", text),
 		//Memoize(true),
 		Recover(false),
-		Debug(true),
+		//Debug(true),
 	)
 	if err != nil {
 		return nil, err
