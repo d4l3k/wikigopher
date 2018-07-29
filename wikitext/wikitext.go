@@ -69,6 +69,13 @@ func concat(fields ...interface{}) string {
 		case []byte:
 			b.Write(f)
 
+		case *html.Node:
+			var buf bytes.Buffer
+			if err := html.Render(&buf, f); err != nil {
+				panic(err)
+			}
+			return buf.String()
+
 		default:
 			panic(errors.Errorf("concat: unsupported f type %T: %+v", f, f))
 		}
@@ -194,8 +201,8 @@ func match(pattern string, input []byte) bool {
 }
 
 func inlineBreaks(c *current) (bool, error) {
-	log.Printf("inlineBreaks %s, %s", c.pos, c.text)
 	pos := c.pos.offset + len(c.text)
+	log.Printf("inlineBreaks %s, %s, pos %d", c.pos, c.text, pos)
 	input := c.globalStore["text"].([]byte)
 	if len(input) <= pos {
 		log.Printf("inlinebreak false")

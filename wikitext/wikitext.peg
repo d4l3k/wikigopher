@@ -126,9 +126,9 @@ nested_block_in_table
     // avoid recursion via nested_block_in_table, as that can lead to stack
     // overflow in large tables
     // See https://phabricator.wikimedia.org/T59670
-    & {
+    #{
     push(c, "tableDataBlock", true)
-    return true, nil
+    return nil
     /*
     return stops.push('tableDataBlock', true);
     */
@@ -137,19 +137,15 @@ nested_block_in_table
     // instead, so that multi-line th content followed by a line prefixed with
     // a comment is also handled. Alternatively, implement a sol look-behind
     // assertion accepting spaces and comments.
-    !(sol (space* sol)? space* (pipe / "!")) b:nested_block {
-    pop(c, "tableDataBlock")
+    !(sol (space* sol)? space* (pipe / "!")) b:nested_block
+    #{pop(c, "tableDataBlock"); return nil}
+    {
     return b, nil
     /*
         stops.pop('tableDataBlock');
         return b;
         */
     }
-  / & {
-    pop(c, "tableDataBlock")
-    return false, nil
-    /*return stops.pop('tableDataBlock');*/
-  }
 
 
 // Line-based block constructs.
@@ -1162,12 +1158,7 @@ wikilink_content
         */
   })*
 
-wikilink <-
-  (
-    #{ push(c, "preproc", "]]"); return nil }
-    wikilink_preproc
-    #{ pop(c, "preproc"); return nil }
-  ) / broken_wikilink
+wikilink <- wikilink_preproc / broken_wikilink
 
 // `broken-link` (see [[:mw:Preprocessor_ABNF]]), but careful because the
 // second bracket could start an extlink.  Deliberately leave entry
@@ -1188,12 +1179,14 @@ broken_wikilink
 
 wikilink_preproc
   <- "[["
+    #{ push(c, "preproc", "]]"); return nil }
     target:wikilink_preprocessor_text?
     & { log.Printf("wikilink_preproc %#v", target); return true, nil}
     //("" {return nil, nil/* return endOffset(); */})
     lcs:wikilink_content
     & { log.Printf("wikilink_content %#v %s", lcs, c.text); spew.Dump(target); return true, nil}
     inline_breaks "]]"
+    #{ pop(c, "preproc"); return nil }
   {
     targetStr := concat(target)
     n := &html.Node{
@@ -1241,11 +1234,11 @@ wikilink_preproc
 
 // Tables are allowed inside image captions.
 link_text
-  <- & {
+  <- #{
       // Suppress the flag temporarily in this rule to consume the '=' here.
       push(c, "equal", false)
       push(c, "linkdesc", true)
-      return true, nil
+      return nil
     }
     c1:(  // This group is similar to "block_line" but "list_item"
          // is omitted since `doBlockLevels` happens after
@@ -1255,15 +1248,13 @@ link_text
        / (!inline_breaks
           r:( inline_element / '[' text_char+ ']' (&(!']' / "]]")) / . ) {return r, nil}
          )
-    )+ {
+    )+ #{
       pop(c, "equal")
       pop(c, "linkdesc")
-      return c1, nil
+      return nil
     }
-    / & {
-      pop(c, "equal")
-      pop(c, "linkdesc")
-      return false, nil
+    {
+      return c1, nil
     }
 
 // Generic quote rule for italic and bold, further processed in a token
