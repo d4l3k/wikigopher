@@ -21,7 +21,7 @@ func Convert(text []byte) ([]byte, error) {
 		GlobalStore("text", text),
 		//Memoize(true),
 		Recover(false),
-		//Debug(true),
+		Debug(true),
 	)
 	if err != nil {
 		return nil, err
@@ -76,48 +76,56 @@ func concat(fields ...interface{}) string {
 	return b.String()
 }
 
-func addChild(n *html.Node, children interface{}) {
+func addChild(n *html.Node, children interface{}) bool {
 	if children == nil {
-		return
+		return false
 	}
 
 	switch children := children.(type) {
 	case []interface{}:
+		added := false
 		for _, c := range children {
-			addChild(n, c)
+			if addChild(n, c) {
+				added = true
+			}
 		}
+		return added
 
 	case *html.Node:
 		n.AppendChild(children)
+		return true
 
 	case []byte:
-		addChild(n, string(children))
+		return addChild(n, string(children))
 
 	case string:
-		addChild(n, &html.Node{
+		return addChild(n, &html.Node{
 			Type: html.TextNode,
 			Data: children,
 		})
 
 	default:
 		log.Fatalf("unsupported children type %T: %#v", children, children)
+		return false
 	}
 }
 
-func inc(c *current, tag string) (bool, error) {
+func inc(c *current, tag string) {
 	v, _ := c.state[tag].(int)
 	v++
 	c.state[tag] = v
-	return true, nil
 }
 
-func dec(c *current, tag string) (bool, error) {
+func dec(c *current, tag string) {
 	v, ok := c.state[tag].(int)
 	if ok {
 		v--
-		c.state[tag] = v
+		if v == 0 {
+			delete(c.state, tag)
+		} else {
+			c.state[tag] = v
+		}
 	}
-	return false, nil
 }
 
 func count(c *current, tag string) int {
@@ -152,7 +160,11 @@ func push(c *current, tag string, val interface{}) int {
 func pop(c *current, tag string) {
 	v, _ := c.state[tag].(stack)
 	if len(v) > 0 {
-		c.state[tag] = v[:len(v)-1]
+		if len(v) == 1 {
+			delete(c.state, tag)
+		} else {
+			c.state[tag] = v[:len(v)-1]
+		}
 	}
 }
 
@@ -182,13 +194,16 @@ func match(pattern string, input []byte) bool {
 }
 
 func inlineBreaks(c *current) (bool, error) {
+	log.Printf("inlineBreaks %s, %s", c.pos, c.text)
+	pos := c.pos.offset + len(c.text)
 	input := c.globalStore["text"].([]byte)
-	if len(input) <= c.pos.offset {
+	if len(input) <= pos {
+		log.Printf("inlinebreak false")
 		return false, nil
 	}
-	pos := c.pos.offset
 	ch := input[pos]
 	if !inlineBreaksRegexp.Match([]byte{ch}) {
+		log.Printf("inlinebreak match fail: %s", []byte{ch})
 		return false, nil
 	}
 
@@ -299,6 +314,7 @@ func inlineBreaks(c *current) (bool, error) {
 			return true, nil
 		}
 		preproc, _ := peek(c, "preproc").(string)
+		log.Printf("inlineBreaks extlink:%#v, preproc:%#v", extlink, preproc)
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case '<':

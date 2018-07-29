@@ -7,7 +7,6 @@ import (
 
 func TestState(t *testing.T) {
 	var p parser
-	p.emptyState = make(storeDict)
 	p.cur.state = make(storeDict)
 	p.restoreState(p.cloneState())
 	c := &p.cur
@@ -59,11 +58,11 @@ func TestConvert(t *testing.T) {
 		},
 		{
 			"[[Jordanstown]]",
-			`<a href="Jordanstown">Jordanstown</a>`,
+			`<p><a href="Jordanstown">Jordanstown</a></p>`,
 		},
 		{
-			"[[Jordanstown Blah]]",
-			`<a href="Jordanstown">Blah</a>`,
+			"[[Jordanstown|Blah]]",
+			`<p><a href="Jordanstown">Blah</a></p>`,
 		},
 		{
 			`{{Infobox basketball club
@@ -71,18 +70,7 @@ func TestConvert(t *testing.T) {
 | color1 = white
 | color2 = blue
 | logo =
-| imagesize =
-| leagues = National League Division 1
-| founded = 2005
-| history = '''University of Ulster'''<br>2005–2008<br>'''Ulster Elks'''<br>2008–present
 | arena = [[Ulster University]] Sports Centre
-| location = [[Jordanstown]], [[Northern Ireland]]
-| colors = Blue & white
-| president =
-| vice-presidents =
-| coach = Paul McKee
-| championships =
-| website =
 }}`,
 			"",
 		},

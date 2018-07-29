@@ -70,7 +70,7 @@ func debugExpr(e interface{}, compute bool) {
 			debugExpr(e, compute)
 		}
 
-	case *ruleRefExpr, *litMatcher, *andCodeExpr, *charClassMatcher, *anyMatcher, *notCodeExpr:
+	case *ruleRefExpr, *litMatcher, *andCodeExpr, *charClassMatcher, *anyMatcher, *notCodeExpr, *stateCodeExpr:
 
 	default:
 		log.Fatalf("debugExpr: unsupported type %T: %#v", e, e)

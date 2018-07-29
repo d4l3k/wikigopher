@@ -253,7 +253,7 @@ inline_element
 heading <- & "=" // guard, to make sure '='+ will match.
 // XXX: Also check to end to avoid inline parsing?
     r:(
-     & { return inc(c, "h") /*return stops.inc('h');*/ }
+     & { inc(c, "h"); return true, nil /*return stops.inc('h');*/ }
      s:'='+ // moved in here to make s accessible to inner action
      ce:(
        // TODO: figure out why inlineline isn't sufficient here.
@@ -537,17 +537,17 @@ url
 // The 's' and 'r' pieces match the characters in EXT_LINK_URL_CLASS
 // which aren't included in no_punctuation_char
 autourl
-  <- &{return false, nil /*return stops.push('autourl', { sawLParen: false }); */}
+  <- &{return true, nil /*return stops.push('autourl', { sawLParen: false }); */}
     ! "//" // protocol-relative autolinks not allowed (T32269)
     (
     url_protocol
     (urladdr / "")
     (  ( !inline_breaks
               ! "("
-              no_punctuation_char
-              {return nil, nil/* return c; */}
+              c1:no_punctuation_char
+              {return c1, nil/* return c; */}
             )
-            / "(" {return nil, nil/* stops.onStack('autourl').sawLParen = true; return "("; */}
+            / "(" {return "(", nil/* stops.onStack('autourl').sawLParen = true; return "("; */}
             / [.:,]
             / (['] ![']) // single quotes are ok, double quotes are bad
             / comment
@@ -623,7 +623,7 @@ tplarg_or_template
     t:tplarg_or_template_guarded {return t, nil /*return t;*/ }
 
 tplarg_or_template_guarded
-  <- &{return inc(c, "templatedepth") /* return stops.inc('templatedepth');*/ }
+  <- &{inc(c, "templatedepth"); return true, nil /* return stops.inc('templatedepth');*/ }
     r:( &("{{" &("{{{"+ !'{') tplarg) a:(template/broken_template) {return a, nil /*return a;*/ }
       / a:('{' &("{{{"+ !'{'))? b:tplarg {return concat(a, b), nil /*return [a].concat(b);*/ }
       / a:('{' &("{{" !'{'))? b:template {return concat(a, b), nil /*return [a].concat(b);*/ }
@@ -636,7 +636,7 @@ tplarg_or_template_guarded
       return r;
       */
     }
-    / & {return dec(c, "templatedepth") /*return stops.dec('templatedepth');*/ }
+    / & {dec(c, "templatedepth"); return false, nil /*return stops.dec('templatedepth');*/ }
 
 tplarg_or_template_or_bust
     <- (tplarg_or_template / .)+
@@ -826,7 +826,8 @@ template_param_text
   push(c, "extlink", false)
   push(c, "templateArg", true)
   push(c, "tableCellArg", false)
-  return inc(c, "template")
+  inc(c, "template")
+  return true, nil
   /*
   // re-enable tables within template parameters
         stops.push('table', false);
@@ -863,7 +864,8 @@ template_param_text
     pop(c, "extlink")
     pop(c, "templateArg")
     pop(c, "tableCellArg")
-    return dec(c, "template")
+    dec(c, "template")
+    return false, nil
   /*
     stops.pop('table');
     stops.pop('extlink');
@@ -1151,34 +1153,61 @@ lang_variant_text_no_semi_or_arrow
   / & {return false, nil/* return stops.pop('arrow'); */}
 
 wikilink_content
-  <- ( pipe ("" {return nil, nil/* return endOffset(); */}) link_text? {return nil, nil/*
+  <-  (pipe lt:link_text? {
+    return lt, nil
+    /*
         var maybeContent = new KV('mw:maybeContent', lt, [startPos, endOffset()]);
         maybeContent.vsrc = input.substring(startPos, endOffset());
         return maybeContent;
         */
-  } )*
+  })*
 
-wikilink <- wikilink_preproc / broken_wikilink
+wikilink <-
+  (
+    #{ push(c, "preproc", "]]"); return nil }
+    wikilink_preproc
+    #{ pop(c, "preproc"); return nil }
+  ) / broken_wikilink
 
 // `broken-link` (see [[:mw:Preprocessor_ABNF]]), but careful because the
 // second bracket could start an extlink.  Deliberately leave entry
 // on preproc stack since we haven't seen a double-close bracket.
 // (See full explanation above broken_template production.)
 broken_wikilink
-  <- &"[[" &{
+  <- &"[[" #{
       push(c, "preproc", "broken")
-      return true, nil
+      return nil
       /* return stops.push('preproc', 'broken'); */
     }
-    a:("[" (extlink / "[")) {return a, nil/* return a; */}
+    a:("[" (extlink / "["))
+    #{ pop(c, "preproc"); return nil }
+    {
+      return a, nil
+      /* return a; */
+    }
 
 wikilink_preproc
   <- "[["
     target:wikilink_preprocessor_text?
+    & { log.Printf("wikilink_preproc %#v", target); return true, nil}
     //("" {return nil, nil/* return endOffset(); */})
     lcs:wikilink_content
+    & { log.Printf("wikilink_content %#v %s", lcs, c.text); spew.Dump(target); return true, nil}
     inline_breaks "]]"
-  {return lcs, nil
+  {
+    targetStr := concat(target)
+    n := &html.Node{
+      Type: html.ElementNode,
+      Data: "a",
+      Attr: []html.Attribute{
+        {Key: "href", Val: targetStr},
+      },
+    }
+    log.Println(lcs)
+    if !addChild(n, lcs) {
+      addChild(n, targetStr)
+    }
+    return n, nil
   /*
       var pipeTrick = (lcs.length === 1 && lcs[0].v === null);
       var textTokens = [];
@@ -1474,7 +1503,7 @@ table_attribute
 // See: http://www.w3.org/TR/html5/syntax.html#attributes-0
 generic_attribute_name
   <- (["'=]?)  // From #before-attribute-name-state, < is omitted for directive
-    ( [^ \t\r\n\x00/=><&{}-!|]+
+    ( [^ \t\r\n\x00/=><&{}!|-]+
         / !inline_breaks
 // \0/=> is the html5 attribute name set we do not want.
           ( directive / !( space_or_newline / [\x00/=>] ) { return nil, nil /*return c;*/ }
@@ -1492,7 +1521,7 @@ broken_table_attribute_name_char <- [\x00/=>] {return nil, nil /* return new KV(
 // We also give a chance to break on \[ (see T2553).
 table_attribute_name
   <- (["'=]?)  // From #before-attribute-name-state, < is omitted for directive
-    ( [^ \t\r\n\x00/=><&{}-!|[]+
+    ( [^ \t\r\n\x00/=><&{}!|[-]+
         / !inline_breaks
 // \0/=> is the html5 attribute name set we do not want.
           (   wikilink
@@ -1933,7 +1962,7 @@ row_syntax_table_args
 // clarify this carefully!
 //
 
-text_char <- [^-'<~[{\n\r:;\]}|!=]
+text_char <- [^'<~[{\n\r:;\]}|!=-]
 
 // Legend
 // '    quotes (italic/bold)
@@ -2200,7 +2229,7 @@ directive
 wikilink_preprocessor_text
   <- r:( [^<[{\n\r\t|!\]}{ &-]+
 // XXX gwicke: any more chars we need to allow here?
-        / !inline_breaks wr:( directive / ( !"]]" ( text_char / [!<-}\]\n\r] ) ) )
+        / !inline_breaks wr:( directive / ( !"]]" ( text_char / [!<}\]\n\r-] ) ) )
         {return wr, nil/* return wr; */}
     )+ {return r, nil
     /*
@@ -2218,7 +2247,7 @@ extlink_preprocessor_text
     return stops.push('linkdesc', false);
     */
   }
-  r:( [^'<~[{\n\r|!\]}-\t&="' \u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]+
+  r:( [^'<~[{\n\r|!\]}\t&="' \u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000-]+
   / !inline_breaks s:( directive / no_punctuation_char / [&|{-] ) {return s, nil/* return s;
   */}
 /// urlencoded_char
@@ -2241,10 +2270,10 @@ extlink_preprocessor_text
 
 // The stop set is space_or_newline and > which matches generic_att_value.
 attribute_preprocessor_text
-  <- r:( [^{}&<-|/ \t\n\r\x0c>]+
+  <- r:( [^{}&<|/ \t\n\r\x0c>-]+
   / !inline_breaks
     !"/>"
-    s:( directive / [{}&<-|/] ) {return s, nil /*return s; */}
+    s:( directive / [{}&<|/-] ) {return s, nil /*return s; */}
   )+ {return r, nil
   /*
     return tu.flattenString(r);
@@ -2253,10 +2282,10 @@ attribute_preprocessor_text
 
 // The stop set is '> which matches generic_att_value.
 attribute_preprocessor_text_single
-  <- r:( [^{}&<-|/'>]+
+  <- r:( [^{}&<|/'>-]+
   / !inline_breaks
     !"/>"
-    s:( directive / [{}&<-|/] ) {return s, nil/* return s; */}
+    s:( directive / [{}&<|/-] ) {return s, nil/* return s; */}
   )* {return r, nil
   /*
     return tu.flattenString(r);
@@ -2265,10 +2294,10 @@ attribute_preprocessor_text_single
 
 // The stop set is "> which matches generic_att_value.
 attribute_preprocessor_text_double
-  <- r:( [^{}&<-|/">]+
+  <- r:( [^{}&<|/">-]+
   / !inline_breaks
     !"/>"
-    s:( directive / [{}&<-|/] ) {return s, nil/* return s; */}
+    s:( directive / [{}&<|/-] ) {return s, nil/* return s; */}
   )* {return r, nil
   /*
     return tu.flattenString(r);
@@ -2285,8 +2314,8 @@ attribute_preprocessor_text_double
 
 // The stop set is space_or_newline and | which matches table_att_value.
 table_attribute_preprocessor_text
-  <- r:( [^{}&<-![ \t\n\r\x0c|]+
-  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  <- r:( [^{}&<![ \t\n\r\x0c|-]+
+  / !inline_breaks s:( directive / [{}&<![-] ) {return s, nil/* return s; */}
   )+ {return r, nil
   /*
     return tu.flattenString(r);
@@ -2295,8 +2324,8 @@ table_attribute_preprocessor_text
 
 // The stop set is '\r\n| which matches table_att_value.
 table_attribute_preprocessor_text_single
-  <- r:( [^{}&<-!['\r\n|]+
-  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  <- r:( [^{}&<!['\r\n|-]+
+  / !inline_breaks s:( directive / [{}&<![-] ) {return s, nil/* return s; */}
   )* {return r, nil
   /*
     return tu.flattenString(r);
@@ -2305,8 +2334,8 @@ table_attribute_preprocessor_text_single
 
 // The stop set is "\r\n| which matches table_att_value.
 table_attribute_preprocessor_text_double
-  <- r:( [^{}&<-!["\r\n|]+
-  / !inline_breaks s:( directive / [{}&<-![] ) {return s, nil/* return s; */}
+  <- r:( [^{}&<!["\r\n|-]+
+  / !inline_breaks s:( directive / [{}&<![-] ) {return s, nil/* return s; */}
   )* {return r, nil
   /*
     return tu.flattenString(r);
