@@ -1,0 +1,22 @@
+{{ define "base" }}
+<html>
+<head>
+  <title>{{block "title" .}}{{.Title}}{{end}} - wikigopher</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <body>
+      <nav>
+        <h1>
+        {{block "title" .}} {{end}}
+          <small>
+          {{block "nav" .}}{{end}}
+          </small>
+        </h1>
+      </nav>
+
+      {{template "content" .}}
+    </body>
+</body>
+</html>
+{{ end }}

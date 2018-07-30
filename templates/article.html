@@ -1,13 +1,7 @@
-<style>
-body {
-  font-family: sans-serif;
-}
-</style>
+{{define "nav"}}
+  <a href="/source/{{.Title}}">Source</a>
+{{end}}
 
-<title>{{.Title}} - wikigopher</title>
-
-<h1>{{.Title}}</h1>
-
-<hr>
-
-{{.Body}}
+{{define "content"}}
+  {{.Body}}
+{{end}}

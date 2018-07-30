@@ -7,17 +7,18 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/blevesearch/bleve"
 	"github.com/d4l3k/wikigopher/wikitext"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/pkg/errors"
 )
@@ -25,15 +26,34 @@ import (
 var (
 	indexFile       = flag.String("index", "enwiki-latest-pages-articles-multistream-index.txt.bz2", "the index file to load")
 	articlesFile    = flag.String("articles", "enwiki-latest-pages-articles-multistream.xml.bz2", "the article dump file to load")
+	search          = flag.Bool("search", false, "whether or not to build a search index")
 	searchIndexFile = flag.String("searchIndex", "index.bleve", "the search index file")
 	httpAddr        = flag.String("http", ":8080", "the address to bind HTTP to")
 )
 
-var tmpls = template.Must(template.ParseGlob("templates/*"))
+var tmpls = map[string]*template.Template{}
+
+func loadTemplates() error {
+	files, err := filepath.Glob("templates/*")
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		name := filepath.Base(file)
+		tmpls[name], err = template.ParseFiles("templates/base.html", file)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func executeTemplate(wr io.Writer, name string, data interface{}) error {
+	return tmpls[name].ExecuteTemplate(wr, "base", data)
+}
 
 type indexEntry struct {
 	id, seek int
-	Title    string
 }
 
 var mu = struct {
@@ -76,14 +96,14 @@ func loadIndex() error {
 		if err != nil {
 			return err
 		}
+		title := strings.Join(parts[2:], ":")
 		entry := indexEntry{
-			id:    id,
-			seek:  seek,
-			Title: strings.Join(parts[2:], ":"),
+			id:   id,
+			seek: seek,
 		}
 
 		mu.Lock()
-		mu.offsets[entry.Title] = entry
+		mu.offsets[title] = entry
 		mu.Unlock()
 
 		i++
@@ -93,6 +113,9 @@ func loadIndex() error {
 	}
 	log.Printf("Done reading!")
 
+	if !*search {
+		return nil
+	}
 	log.Printf("Indexing titles...")
 	i = 0
 	batch := index.NewBatch()
@@ -203,7 +226,121 @@ func readArticle(meta indexEntry) (page, error) {
 	return p, nil
 }
 
+func fetchArticle(name string) (indexEntry, error) {
+	articleMeta, ok := mu.offsets[name]
+	if ok {
+		return articleMeta, nil
+	}
+	articleMeta, ok = mu.offsets[strings.Title(strings.ToLower(name))]
+	if ok {
+		return articleMeta, nil
+	}
+	return indexEntry{}, statusErrorf(http.StatusNotFound, "article not found")
+}
+
+type statusError int
+
+func (s statusError) Error() string {
+	return fmt.Sprintf("%d - %s", int(s), http.StatusText(int(s)))
+}
+
+func statusErrorf(code int, str string, args ...interface{}) error {
+	return errors.Wrapf(statusError(code), str, args...)
+}
+
+func errorHandler(f func(w http.ResponseWriter, r *http.Request) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := f(w, r); err != nil {
+			cause := errors.Cause(err)
+			status := http.StatusInternalServerError
+			if cause, ok := cause.(statusError); ok {
+				status = int(cause)
+			}
+			http.Error(w, err.Error(), status)
+		}
+	}
+
+}
+
+func handleArticle(w http.ResponseWriter, r *http.Request) error {
+	articleName := path.Base(r.URL.Path)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if articleName == "Special:Random" {
+		for name := range mu.offsets {
+			http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
+			return nil
+		}
+	}
+
+	articleMeta, err := fetchArticle(articleName)
+	if err != nil {
+		return err
+	}
+
+	p, err := readArticle(articleMeta)
+	if err != nil {
+		return err
+	}
+
+	if p.Title != articleName {
+		http.Redirect(w, r, fmt.Sprintf("/wiki/%s", p.Title), http.StatusTemporaryRedirect)
+		return nil
+	}
+
+	body, err := wikitext.Convert([]byte(p.Text))
+	if err != nil {
+		return err
+	}
+	if err := executeTemplate(w, "article.html", struct {
+		Title string
+		Body  template.HTML
+	}{
+		Title: articleName,
+		Body:  template.HTML(bluemonday.UGCPolicy().Sanitize(string(body))),
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleSource(w http.ResponseWriter, r *http.Request) error {
+	articleName := path.Base(r.URL.Path)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if articleName == "Special:Random" {
+		for name := range mu.offsets {
+			http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
+		}
+	}
+
+	articleMeta, err := fetchArticle(articleName)
+	if err != nil {
+		return err
+	}
+	p, err := readArticle(articleMeta)
+	if err != nil {
+		return err
+	}
+	return executeTemplate(w, "source.html", p)
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) error {
+	_, err := w.Write([]byte("todo"))
+	return err
+}
+
 func main() {
+	if err := run(); err != nil {
+		log.Fatal("%+v", err)
+	}
+}
+
+func run() error {
 	flag.Parse()
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
@@ -213,55 +350,15 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/wiki/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-		articleName := path.Base(r.URL.Path)
+	if err := loadTemplates(); err != nil {
+		return err
+	}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		if articleName == "Special:Random" {
-			for name := range mu.offsets {
-				http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
-				return
-			}
-		}
-
-		articleMeta, ok := mu.offsets[articleName]
-		if !ok {
-			http.Error(w, "article not found", http.StatusNotFound)
-			return
-		}
-		log.Printf("index %#v", articleMeta)
-
-		p, err := readArticle(articleMeta)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("%+v", err), 500)
-			return
-		}
-		spew.Dump(p)
-		body, err := wikitext.Convert([]byte(p.Text))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("%+v", err), 500)
-			return
-		}
-		if err := tmpls.ExecuteTemplate(w, "article.html", struct {
-			Title string
-			Body  template.HTML
-		}{
-			Title: articleName,
-			Body:  template.HTML(bluemonday.UGCPolicy().Sanitize(string(body))),
-		}); err != nil {
-			http.Error(w, fmt.Sprintf("%+v", err), 500)
-			return
-		}
-	})
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("todo"))
-	})
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+	http.HandleFunc("/source/", errorHandler(handleSource))
+	http.HandleFunc("/wiki/", errorHandler(handleArticle))
+	http.HandleFunc("/", errorHandler(handleIndex))
 
 	log.Printf("Listening on %s...", *httpAddr)
-	if err := http.ListenAndServe(*httpAddr, nil); err != nil {
-		log.Fatalf("%+v", err)
-	}
+	return http.ListenAndServe(*httpAddr, nil)
 }
