@@ -36,6 +36,26 @@ func TestRules(t *testing.T) {
 			"{{reflink}}",
 			"",
 		},
+		{
+			"block_lines",
+			"* foo",
+			"<li> foo</li>",
+		},
+		{
+			"heading",
+			"== Foos ==",
+			"<h2> Foos </h2>",
+		},
+		{
+			"inlineline",
+			"Foo's",
+			"Foo's",
+		},
+		{
+			"heading",
+			"== Foo's ==",
+			"<h2> Foo&#39;s </h2>",
+		},
 	}
 
 	for _, c := range cases {

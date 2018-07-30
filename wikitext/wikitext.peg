@@ -152,8 +152,8 @@ nested_block_in_table
 //
 block_lines
   <- s:sol
-// eat an empty line before the block
-    s2:(os:optionalSpaceToken so:sol)
+    // eat an empty line before the block
+    (s2:(os:optionalSpaceToken so:sol))?
     bl:block_line
 
 // Horizontal rules
@@ -254,11 +254,10 @@ inline_element
 heading <- & "=" // guard, to make sure '='+ will match.
 // XXX: Also check to end to avoid inline parsing?
     r:(
-     #{ inc(c, "h"); return  nil /*return stops.inc('h');*/ }
+     #{ inc(c, "h"); return nil /*return stops.inc('h');*/ }
      s:'='+ // moved in here to make s accessible to inner action
      ce:(
-       // TODO: figure out why inlineline isn't sufficient here.
-       (ill:(urltext? / inlineline?))
+       (ill:(inlineline?))
        '='+ {return ill, nil}
      )?
      & {
@@ -1568,7 +1567,7 @@ list_item <- dtdd / hacky_dl_uses / li
 
 li <- bullets:list_char+
      c2:inlineline?
-// The inline_break is to check if we've hit a template end delimiter.
+     // The inline_break is to check if we've hit a template end delimiter.
      &(eolf / inline_breaks)
 {
   n := &html.Node{
@@ -2061,20 +2060,16 @@ optionalNewlines
   <- ([\n\r\t ] &[\n\r])*
 
 comment_or_includes <- (comment / (
-    ( & {
+    ( #{
       push(c, "sol_il", true)
-      return true, nil
+      return nil
     }
       i:include_limits
-      & {
-        //pop(c, "sol_il")
-        return true, nil
+      #{
+        pop(c, "sol_il")
+        return nil
       }
     ) {return i, nil}
-    / & {
-      //pop(c, "sol_il")
-      return false, nil
-    }
   ))*
 
 sol <- (empty_line_with_comments / sol_prefix) comment_or_includes
