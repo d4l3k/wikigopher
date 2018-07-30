@@ -74,6 +74,10 @@ func TestConvert(t *testing.T) {
 }}`,
 			"<p></p>",
 		},
+		{
+			`<div class="bar">Test</div>`,
+			`<p><div class="bar">Test</div></p>`,
+		},
 	}
 
 	debugRules(true)

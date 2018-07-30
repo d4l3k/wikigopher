@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/pkg/errors"
 	"golang.org/x/net/html"
 )
@@ -44,17 +45,46 @@ func Convert(text []byte) ([]byte, error) {
 		return nil, errors.Errorf("expected *html.Node got: %T", v)
 	}
 
+	if remaining := processTokens(doc); len(remaining) > 0 {
+		return nil, errors.Errorf("got %d extra children nodes:\n%s", len(remaining), concat(remaining))
+	}
+
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		return nil, err
 	}
 
-	return bytes.TrimSpace(buf.Bytes()), nil
+	policy := bluemonday.UGCPolicy()
+	policy.RequireNoFollowOnLinks(false)
+	policy.RequireNoFollowOnFullyQualifiedLinks(true)
+	policy.AllowStyling()
+	policy.AllowAttrs("id", "style").Globally()
+	policy.AllowAttrs("_parsestart", "_parseend", "_parsetoken").Globally()
+	policy.AllowElements("ref")
+
+	return bytes.TrimSpace(policy.SanitizeBytes(buf.Bytes())), nil
+}
+
+func flatten(fields ...interface{}) []interface{} {
+	var out []interface{}
+	for _, f := range fields {
+		if f == nil {
+			continue
+		}
+
+		switch f := f.(type) {
+		case []interface{}:
+			out = append(out, flatten(f...)...)
+		default:
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func concat(fields ...interface{}) string {
 	var b strings.Builder
-	for _, f := range fields {
+	for _, f := range flatten(fields...) {
 		if f == nil {
 			continue
 		}
@@ -62,9 +92,6 @@ func concat(fields ...interface{}) string {
 		switch f := f.(type) {
 		case string:
 			b.WriteString(f)
-
-		case []interface{}:
-			b.WriteString(concat(f...))
 
 		case []byte:
 			b.Write(f)

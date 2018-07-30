@@ -61,6 +61,26 @@ func TestRules(t *testing.T) {
 			"[http://example.com/ Yes Foo Bar]",
 			`<a href="http://example.com/" class="external" rel="nofollow">Yes Foo Bar</a>`,
 		},
+		{
+			"xmlish_tag",
+			"<div>foo</div>",
+			`<div _parsestart=""></div>`,
+		},
+		{
+			"xmlish_tag",
+			"</div>",
+			`<div _parseend=""></div>`,
+		},
+		{
+			"xmlish_tag",
+			"<div/>",
+			"<div></div>",
+		},
+		{
+			"xmlish_tag",
+			`<div foo="bar" />`,
+			`<div foo="bar"></div>`,
+		},
 	}
 
 	for _, c := range cases {

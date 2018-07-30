@@ -79,6 +79,7 @@ p {
 
 .body {
   font-size: 0.875em;
+  position: relative;
 }
 
 a.external::after {
@@ -103,11 +104,29 @@ a.external::after {
   float: right;
 }
 
+a {
+  text-decoration: none;
+  color: #0645ad;
+  background: none;
+}
+
+a:visited {
+  color:#0b0080;
+}
+
+a:active {
+  color:#faa700;
+}
+
+a:hover, a:focus {
+  text-decoration: underline;
+}
+
 .image .caption {
   text-align: left;
 }
 
-.brand {
+.brand, .brand:hover, .brand:focus, .brand:active, .brand:visited {
   text-decoration: none;
   font-family: monospace;
   font-size: 1.5em;
@@ -123,4 +142,17 @@ nav > * {
 
 nav > a {
   display: block;
+}
+
+ref {
+  vertical-align: super;
+  font-size: smaller;
+}
+
+ref::before {
+  content:"[";
+}
+
+ref::after {
+  content:"]";
 }
