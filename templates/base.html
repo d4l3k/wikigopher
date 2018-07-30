@@ -3,19 +3,32 @@
 <head>
   <title>{{block "title" .}}{{.Title}}{{end}} - wikigopher</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="shortcut icon" href="/static/favicon.png" />
 </head>
 <body>
     <body>
       <nav>
-        <h1>
-        {{block "title" .}} {{end}}
-          <small>
-          {{block "nav" .}}{{end}}
-          </small>
-        </h1>
-      </nav>
+        <a class="brand" href="/wiki/Main Page">
+          <img src="/static/gopher-front.svg">
+          <div>wikigopher</div>
+        </a>
 
-      {{template "content" .}}
+        <a href="/wiki/Main_Page">Main Page</a>
+        <a href="https://github.com/d4l3k/wikigopher">Source Code</a>
+        <p>Created by <a href="https://fn.lc">Tristan Rice</a>.</p>
+      </nav>
+      <div class="content">
+        <h1>
+          {{block "title" .}} {{end}}
+          <span class="content-nav">
+            {{block "nav" .}}{{end}}
+          </span>
+        </h1>
+
+        <div class="body">
+          {{template "content" .}}
+        </div>
+      </div>
     </body>
 </body>
 </html>

@@ -58,11 +58,11 @@ func TestConvert(t *testing.T) {
 		},
 		{
 			"[[Jordanstown]]",
-			`<p><a href="Jordanstown">Jordanstown</a></p>`,
+			`<p><a href="./Jordanstown">Jordanstown</a></p>`,
 		},
 		{
 			"[[Jordanstown|Blah]]",
-			`<p><a href="Jordanstown">Blah</a></p>`,
+			`<p><a href="./Jordanstown">Blah</a></p>`,
 		},
 		{
 			`{{Infobox basketball club

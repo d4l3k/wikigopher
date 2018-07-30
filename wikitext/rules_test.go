@@ -24,12 +24,12 @@ func TestRules(t *testing.T) {
 		{
 			"wikilink_preproc",
 			"[[asdf]]",
-			`<a href="asdf">asdf</a>`,
+			`<a href="./asdf">asdf</a>`,
 		},
 		{
 			"wikilink_preproc",
 			"[[a|b]]",
-			`<a href="a">b</a>`,
+			`<a href="./a">b</a>`,
 		},
 		{
 			"template",
@@ -55,6 +55,11 @@ func TestRules(t *testing.T) {
 			"heading",
 			"== Foo's ==",
 			"<h2> Foo&#39;s </h2>",
+		},
+		{
+			"extlink",
+			"[http://example.com/ Yes Foo Bar]",
+			`<a href="http://example.com/" class="external" rel="nofollow">Yes Foo Bar</a>`,
 		},
 	}
 

@@ -20,7 +20,6 @@ import (
 	"bitbucket.org/creachadair/cityhash"
 	"github.com/blevesearch/bleve"
 	"github.com/d4l3k/wikigopher/wikitext"
-	"github.com/microcosm-cc/bluemonday"
 	"github.com/pkg/errors"
 )
 
@@ -288,21 +287,30 @@ func errorHandler(f func(w http.ResponseWriter, r *http.Request) error) http.Han
 			if cause, ok := cause.(statusError); ok {
 				status = int(cause)
 			}
-			http.Error(w, err.Error(), status)
+			if err := executeTemplate(w, "error.html", struct {
+				Title, Error string
+			}{
+				Title: err.Error(),
+				Error: fmt.Sprintf("%+v", err),
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(status)
 		}
 	}
 
 }
 
 func handleArticle(w http.ResponseWriter, r *http.Request) error {
-	articleName := path.Base(r.URL.Path)
+	articleName := wikitext.URLToTitle(path.Base(r.URL.Path))
 
 	if articleName == "Special:Random" {
 		article, err := randomArticle()
 		if err != nil {
 			return err
 		}
-		http.Redirect(w, r, fmt.Sprintf("/wiki/%s", article.Title), http.StatusTemporaryRedirect)
+		http.Redirect(w, r, path.Join("/wiki/", wikitext.TitleToURL(article.Title)), http.StatusTemporaryRedirect)
 		return nil
 	}
 
@@ -317,7 +325,7 @@ func handleArticle(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	if p.Title != articleName {
-		http.Redirect(w, r, fmt.Sprintf("/wiki/%s", p.Title), http.StatusTemporaryRedirect)
+		http.Redirect(w, r, path.Join("/wiki/", wikitext.TitleToURL(p.Title)), http.StatusTemporaryRedirect)
 		return nil
 	}
 
@@ -330,7 +338,7 @@ func handleArticle(w http.ResponseWriter, r *http.Request) error {
 		Body  template.HTML
 	}{
 		Title: articleName,
-		Body:  template.HTML(bluemonday.UGCPolicy().Sanitize(string(body))),
+		Body:  template.HTML(body),
 	}); err != nil {
 		return err
 	}
@@ -338,7 +346,7 @@ func handleArticle(w http.ResponseWriter, r *http.Request) error {
 }
 
 func handleSource(w http.ResponseWriter, r *http.Request) error {
-	articleName := path.Base(r.URL.Path)
+	articleName := wikitext.URLToTitle(path.Base(r.URL.Path))
 
 	articleMeta, err := fetchArticle(articleName)
 	if err != nil {
@@ -352,8 +360,8 @@ func handleSource(w http.ResponseWriter, r *http.Request) error {
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) error {
-	_, err := w.Write([]byte("todo"))
-	return err
+	http.Redirect(w, r, "/wiki/Main_Page", http.StatusTemporaryRedirect)
+	return nil
 }
 
 func main() {

@@ -378,12 +378,17 @@ behavior_text <- ( !"__" [^'"<~[{\n\r:;\]}|!=] )+
 // ************************************************************/
 
 autolink
-  <- ! {return true, nil /*return stops.onStack('extlink');*/ }
-// this must be a word boundary, so previous character must be non-word
+  <- ! {
+    extlink, _ := peek(c, "extlink").(bool)
+    return extlink, nil
+    /*return stops.onStack('extlink');*/
+  }
+    // this must be a word boundary, so previous character must be non-word
     ! {return true, nil /*return /\w/.test(input[endOffset() - 1] || '');*/ }
   r:(
-// urllink, inlined
-      target:autourl {return "autourl", nil
+      // urllink, inlined
+      target:autourl {
+      return target, nil
       /*
         var res = [new SelfclosingTagTk('urllink', [new KV('href', target)], { tsr: tsrOffsets() })];
           return res;
@@ -393,19 +398,25 @@ autolink
     / isbn) {return r, nil /*return r;*/ }
 
 extlink
-  <- ! {return true, nil/* return stops.onStack('extlink'); */} // extlink cannot be nested
-  (
+  <- ! {
+      extlink, _ := peek(c, "extlink").(bool)
+      return extlink, nil
+      /* return stops.onStack('extlink'); */
+    } // extlink cannot be nested
         "["
-        & {return false, nil /*return stops.push('extlink', return true, nil);*/ }
-        (url_protocol urladdr / "")
-        (extlink_preprocessor_text / "")
-        & {return false, nil /*
-// Protocol must be valid and there ought to be at least one
-// post-protocol character.  So strip last char off target
-// before testing protocol.
+        # {push(c, "extlink", true); return nil /*return stops.push('extlink', true);*/ }
+        addr:(url_protocol urladdr / "")
+        target:(extlink_preprocessor_text / "")
+        & {
+          // TODO: smarter check
+          return true, nil
+        /*
+          // Protocol must be valid and there ought to be at least one
+          // post-protocol character.  So strip last char off target
+          // before testing protocol.
           var flat = tu.flattenString([addr, target]);
           if (Array.isArray(flat)) {
-// There are templates present, alas.
+          // There are templates present, alas.
              return flat.length > 0;
           }
           return Util.isProtocolValid(flat.slice(0, -1), env);
@@ -413,8 +424,21 @@ extlink
         }
         ( space / unispace )*
         //( "" {return nil, nil /*return endOffset();*/ })
-        inlineline?
-        "]" {return nil, nil
+        content:inlineline?
+        "]"
+        #{ pop(c, "extlink"); return nil }
+        {
+        n := &html.Node{
+          Type: html.ElementNode,
+          Data: "a",
+          Attr: []html.Attribute{
+            {Key: "href", Val: concat(addr, target)},
+            {Key: "class", Val: "external"},
+            {Key: "rel", Val: "nofollow"},
+          },
+        }
+        addChild(n, content)
+        return n, nil
         /*
             stops.pop('extlink');
             return [
@@ -430,8 +454,6 @@ extlink
             ];
             */
         }
-      / "[" & {return false, nil /*return stops.pop('extlink');*/ }
-    ) {return nil, nil /*return r;*/ }
 
 autoref
   <- ("RFC" / "PMID") space_or_nbsp+ [0-9]+ end_of_word
@@ -1182,14 +1204,44 @@ wikilink_preproc
     #{ pop(c, "preproc"); return nil }
   {
     targetStr := concat(target)
+    if strings.HasPrefix(targetStr, "File:") || strings.HasPrefix(targetStr, "Image:") {
+      n := &html.Node{
+        Type: html.ElementNode,
+        Data: "div",
+        Attr: []html.Attribute{
+          {Key: "class", Val: "image"},
+        },
+      }
+      link := &html.Node{
+        Type: html.ElementNode,
+        Data: "a",
+        Attr: []html.Attribute{
+          {Key: "href", Val: TitleToURL(targetStr)},
+        },
+      }
+      addChild(link, targetStr)
+      addChild(n, link)
+      children, ok := lcs.([]interface{})
+      if ok && len(children) > 0 {
+        descDiv := &html.Node{
+          Type: html.ElementNode,
+          Data: "div",
+          Attr: []html.Attribute{
+            {Key: "class", Val: "caption"},
+          },
+        }
+        addChild(descDiv, children[len(children)-1])
+        addChild(n, descDiv)
+      }
+      return n, nil
+    }
     n := &html.Node{
       Type: html.ElementNode,
       Data: "a",
       Attr: []html.Attribute{
-        {Key: "href", Val: targetStr},
+        {Key: "href", Val: TitleToURL(targetStr)},
       },
     }
-    log.Println(lcs)
     if !addChild(n, lcs) {
       addChild(n, targetStr)
     }
@@ -2220,7 +2272,7 @@ wikilink_preprocessor_text
 extlink_preprocessor_text
 // added special separator character class inline: separates url from
 // description / text
-  <- & { return true, nil
+  <- # { push(c, "linkdesc", false); return nil
   /*
 // Prevent breaking on pipes when we're in a link description.
 // See the test, 'Images with the "|" character in the comment'.
@@ -2234,13 +2286,14 @@ extlink_preprocessor_text
 // !inline_breaks no_punctuation_char
   / ([.:,] !(space / eolf))
   / (['] ![']) // single quotes are ok, double quotes are bad
-  )+ {return r, nil
+  )+
+  #{ pop(c, "linkdesc"); return nil }
+  {return r, nil
   /*
       stops.pop('linkdesc');
       return tu.flattenString(r);
       */
   }
-  / & {return false, nil/* return stops.pop('linkdesc'); */}
 
 // Attribute values with preprocessor support
 

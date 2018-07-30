@@ -6,6 +6,14 @@ body {
   font-family: sans-serif;
   color: #222222;
   line-height: 1.6;
+  display: flex;
+  margin: 0;
+  padding: 0;
+  background-color: #f6f6f6;
+}
+
+nav {
+  margin: 1.6em;
 }
 
 pre {
@@ -41,6 +49,7 @@ h1 {
 }
 
 h2 {
+  margin-top: 1em;
   font-size: 1.5em;
 }
 
@@ -51,5 +60,67 @@ h3 {
 p {
   line-height: inherit;
   margin: 0.5em 0;
+}
+
+.content {
+  margin: 2em 0;
+  border: 1px solid #a7d7f9;
+  border-right: none;
+  background-color: white;
+  padding: 1.25em 1.5em 1.5em 1.5em;
+  flex-grow: 10000;
+}
+
+.content-nav {
+  font-size: 0.5em;
+  font-family: sans-serif;
+  float: right;
+}
+
+.body {
   font-size: 0.875em;
+}
+
+a.external::after {
+  content: " 🔗";
+  text-decoration: none;
+  display: inline-block;
+  margin-left: 2px;
+  position: relative;
+  bottom: 4px;
+  font-size: 0.9em;
+}
+
+.image {
+  border: 1px solid #c8ccd1;
+  padding: 3px;
+  background-color: #f8f9fa;
+  font-size: 94%;
+  text-align: center;
+  overflow: hidden;
+  width: 300px;
+  margin: 0.5em 0 1.3em 1.4em;
+  float: right;
+}
+
+.image .caption {
+  text-align: left;
+}
+
+.brand {
+  text-decoration: none;
+  font-family: monospace;
+  font-size: 1.5em;
+  color: inherit;
+  padding-bottom: 1.5em;
+  display: block;
+  text-align: center;
+}
+
+nav > * {
+  font-size: 0.875em;
+}
+
+nav > a {
+  display: block;
 }
