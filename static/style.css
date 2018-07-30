@@ -1,5 +1,11 @@
+html {
+  font-size: 100%;
+}
+
 body {
   font-family: sans-serif;
+  color: #222222;
+  line-height: 1.6;
 }
 
 pre {
@@ -16,13 +22,34 @@ h1, h2, h3, h4, h5, h6 {
   padding-top: 0.5em;
   padding-bottom: 0.17em;
   border-bottom: 1px solid #a2a9b1;
+}
 
-	font-family: 'Linux Libertine','Georgia','Times',serif;
-	line-height: 1.3;
-	margin-bottom: 0.25em;
-	padding: 0;
+h1, h2 {
+  font-family: 'Linux Libertine','Georgia','Times',serif;
+  line-height: 1.3;
+  margin-bottom: 0.25em;
+  padding: 0;
+}
+
+h3, h4, h5, h6 {
+  border-bottom: 0;
+  font-weight: bold;
 }
 
 h1 {
-	font-size: 1.8em;
+  font-size: 1.8em;
+}
+
+h2 {
+  font-size: 1.5em;
+}
+
+h3 {
+  font-size: 1.2em;
+}
+
+p {
+  line-height: inherit;
+  margin: 0.5em 0;
+  font-size: 0.875em;
 }

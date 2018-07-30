@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"bitbucket.org/creachadair/cityhash"
 	"github.com/blevesearch/bleve"
 	"github.com/d4l3k/wikigopher/wikitext"
 	"github.com/microcosm-cc/bluemonday"
@@ -59,9 +60,9 @@ type indexEntry struct {
 var mu = struct {
 	sync.Mutex
 
-	offsets map[string]indexEntry
+	offsets map[uint64]indexEntry
 }{
-	offsets: map[string]indexEntry{},
+	offsets: map[uint64]indexEntry{},
 }
 var index bleve.Index
 
@@ -101,9 +102,10 @@ func loadIndex() error {
 			id:   id,
 			seek: seek,
 		}
+		titleHash := cityhash.Hash64([]byte(title))
 
 		mu.Lock()
-		mu.offsets[title] = entry
+		mu.offsets[titleHash] = entry
 		mu.Unlock()
 
 		i++
@@ -111,42 +113,46 @@ func loadIndex() error {
 			log.Printf("read %d entries", i)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
 	log.Printf("Done reading!")
 
 	if !*search {
 		return nil
 	}
-	log.Printf("Indexing titles...")
-	i = 0
-	batch := index.NewBatch()
 
-	mu.Lock()
-	defer mu.Unlock()
+	/*
+		log.Printf("Indexing titles...")
+		i = 0
+		batch := index.NewBatch()
 
-	for key, entry := range mu.offsets {
-		mu.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
 
-		if err := batch.Index(key, entry); err != nil {
-			mu.Lock()
-			return err
-		}
-		i++
-		if i%100000 == 0 {
-			if err := index.Batch(batch); err != nil {
+		for key, entry := range mu.offsets {
+			mu.Unlock()
+
+			if err := batch.Index(key, entry); err != nil {
 				mu.Lock()
 				return err
 			}
-			batch.Reset()
-			log.Printf("indexed %d entries", i)
+			i++
+			if i%100000 == 0 {
+				if err := index.Batch(batch); err != nil {
+					mu.Lock()
+					return err
+				}
+				batch.Reset()
+				log.Printf("indexed %d entries", i)
+			}
+
+			mu.Lock()
 		}
 
-		mu.Lock()
-	}
+		log.Printf("Done indexing!")
+	*/
 
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	log.Printf("Done indexing!")
 	return nil
 }
 
@@ -227,15 +233,41 @@ func readArticle(meta indexEntry) (page, error) {
 }
 
 func fetchArticle(name string) (indexEntry, error) {
-	articleMeta, ok := mu.offsets[name]
+	mu.Lock()
+	defer mu.Unlock()
+
+	articleMeta, ok := mu.offsets[cityhash.Hash64([]byte(name))]
 	if ok {
 		return articleMeta, nil
 	}
-	articleMeta, ok = mu.offsets[strings.Title(strings.ToLower(name))]
+	articleMeta, ok = mu.offsets[cityhash.Hash64([]byte(strings.Title(strings.ToLower(name))))]
 	if ok {
 		return articleMeta, nil
 	}
 	return indexEntry{}, statusErrorf(http.StatusNotFound, "article not found")
+}
+
+func randomArticleHash() (uint64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	for hash := range mu.offsets {
+		return hash, nil
+	}
+	return 0, errors.Errorf("no articles")
+}
+
+func randomArticle() (page, error) {
+	hash, err := randomArticleHash()
+	if err != nil {
+		return page{}, err
+	}
+
+	mu.Lock()
+	meta := mu.offsets[hash]
+	mu.Unlock()
+
+	return readArticle(meta)
 }
 
 type statusError int
@@ -265,14 +297,13 @@ func errorHandler(f func(w http.ResponseWriter, r *http.Request) error) http.Han
 func handleArticle(w http.ResponseWriter, r *http.Request) error {
 	articleName := path.Base(r.URL.Path)
 
-	mu.Lock()
-	defer mu.Unlock()
-
 	if articleName == "Special:Random" {
-		for name := range mu.offsets {
-			http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
-			return nil
+		article, err := randomArticle()
+		if err != nil {
+			return err
 		}
+		http.Redirect(w, r, fmt.Sprintf("/wiki/%s", article.Title), http.StatusTemporaryRedirect)
+		return nil
 	}
 
 	articleMeta, err := fetchArticle(articleName)
@@ -309,15 +340,6 @@ func handleArticle(w http.ResponseWriter, r *http.Request) error {
 func handleSource(w http.ResponseWriter, r *http.Request) error {
 	articleName := path.Base(r.URL.Path)
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	if articleName == "Special:Random" {
-		for name := range mu.offsets {
-			http.Redirect(w, r, fmt.Sprintf("/wiki/%s", name), http.StatusTemporaryRedirect)
-		}
-	}
-
 	articleMeta, err := fetchArticle(articleName)
 	if err != nil {
 		return err
@@ -336,7 +358,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) error {
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatal("%+v", err)
+		log.Fatalf("%+v", err)
 	}
 }
 
