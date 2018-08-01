@@ -1,8 +1,6 @@
 package wikitext
 
 import (
-	"log"
-
 	"golang.org/x/net/html"
 )
 
@@ -27,19 +25,18 @@ func removeAttr(n *html.Node, key string) {
 }
 
 func processTokens(n *html.Node) []*html.Node {
-	log.Printf("parent (children %d) %+v ", numChildren(n), n)
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		log.Printf("child %+v", child)
 		if hasAttr(child, "_parsestart") {
 			removeAttr(child, "_parsestart")
 			remaining := removeSiblingsAfter(child)
+			//log.Printf("children: %q, %s", child.Data, spew.Sdump(remaining))
 			addChildren(child, remaining)
 		} else if hasAttr(child, "_parseend") {
 			remaining := removeSiblingsAfter(child)
-			n.RemoveChild(child)
+			child.Parent.RemoveChild(child)
 			return remaining
 		}
-		addChildren(n, processTokens(child))
+		addChildren(child.Parent, processTokens(child))
 	}
 	return nil
 }

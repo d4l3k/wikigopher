@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"bitbucket.org/creachadair/cityhash"
 	"github.com/blevesearch/bleve"
+	pbzip2 "github.com/d4l3k/go-pbzip2"
 	"github.com/d4l3k/wikigopher/wikitext"
 	"github.com/pkg/errors"
 )
@@ -59,9 +61,11 @@ type indexEntry struct {
 var mu = struct {
 	sync.Mutex
 
-	offsets map[uint64]indexEntry
+	offsets    map[uint64]indexEntry
+	offsetSize map[int]int
 }{
-	offsets: map[uint64]indexEntry{},
+	offsets:    map[uint64]indexEntry{},
+	offsetSize: map[int]int{},
 }
 var index bleve.Index
 
@@ -78,7 +82,12 @@ func loadIndex() error {
 		return err
 	}
 	defer f.Close()
-	r := bzip2.NewReader(f)
+	r, err := pbzip2.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
 	scanner := bufio.NewScanner(r)
 
 	log.Printf("Reading index file...")
@@ -105,6 +114,7 @@ func loadIndex() error {
 
 		mu.Lock()
 		mu.offsets[titleHash] = entry
+		mu.offsetSize[entry.seek]++
 		mu.Unlock()
 
 		i++
@@ -210,6 +220,10 @@ func readArticle(meta indexEntry) (page, error) {
 	}
 	defer f.Close()
 
+	mu.Lock()
+	maxTries := mu.offsetSize[meta.seek]
+	mu.Unlock()
+
 	r := bzip2.NewReader(f)
 
 	if _, err := f.Seek(int64(meta.seek), 0); err != nil {
@@ -219,16 +233,16 @@ func readArticle(meta indexEntry) (page, error) {
 	d := xml.NewDecoder(r)
 
 	var p page
-	for {
+	for i := 0; i < maxTries; i++ {
 		if err := d.Decode(&p); err != nil {
 			return page{}, err
 		}
 		if p.ID == meta.id {
-			break
+			return p, nil
 		}
 	}
 
-	return p, nil
+	return page{}, errors.Errorf("failed to find page after %d tries", maxTries)
 }
 
 func fetchArticle(name string) (indexEntry, error) {
@@ -243,7 +257,7 @@ func fetchArticle(name string) (indexEntry, error) {
 	if ok {
 		return articleMeta, nil
 	}
-	return indexEntry{}, statusErrorf(http.StatusNotFound, "article not found")
+	return indexEntry{}, statusErrorf(http.StatusNotFound, "article not found: %q", name)
 }
 
 func randomArticleHash() (uint64, error) {
@@ -329,7 +343,10 @@ func handleArticle(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	body, err := wikitext.Convert([]byte(p.Text))
+	body, err := wikitext.Convert(
+		[]byte(p.Text),
+		wikitext.TemplateHandler(p.templateHandler),
+	)
 	if err != nil {
 		return err
 	}

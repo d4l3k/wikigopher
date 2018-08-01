@@ -224,13 +224,12 @@ br <- optionalSpaceToken &newline {
 inline_breaks <- & { return inlineBreaks(c) }
 
 inlineline
-  <- ((r:urltext #{log.Printf("urltext %q", concat(r)); return nil})
+  <- ((r:urltext)
     / inlineline_element)+
 
 inlineline_element
   <- !inline_breaks
     r:(inline_element / [^\r\n])
-    #{log.Printf("inline_element: %q", concat(r)); return nil}
     {return r, nil}
 
 inline_element
@@ -674,7 +673,7 @@ template
       popTo(c, "preproc", pop(c, "level").(int))
       return nil
     }
-    {return nil, nil/* stops.popTo('preproc', stopLen); return t; */}
+    {return t, nil/* stops.popTo('preproc', stopLen); return t; */}
 
 // The PHP preprocessor maintains a single stack of "closing token we
 // are currently looking for", with no backtracking.  This means that
@@ -717,22 +716,36 @@ broken_template
 
 template_preproc
   <- "{{" nl_comment_space*
-    &{log.Println("template_preproc", c.text); return true, nil}
     target:template_param_value
-    &{log.Println("template_param_value", concat(c.text)); spew.Dump(target); return true, nil}
-    (nl_comment_space* "|"
+    attributes:(nl_comment_space* "|"
                 r:(
-                    v:nl_comment_space*
+                    nl_comment_space*
                     &("|" / "}}")
-                    {return v, nil/* return new KV('', tu.flattenIfArray(v), [p0, p0, p0,
+                    {return nil, nil/* return new KV('', tu.flattenIfArray(v), [p0, p0, p0,
                     p]);*/
                     } // empty argument
                     / template_param
                   ) {return r, nil/* return r; */}
             )*
     nl_comment_space*
-    &{log.Println("nl_comment_space"); return true, nil}
-    inline_breaks "}}" {return target, nil
+    inline_breaks "}}" {
+      opts, ok := c.globalStore["opts"].(opts)
+      if !ok {
+        return nil, nil
+      }
+      if opts.templateHandler == nil {
+        return nil, nil
+      }
+      var attrs []Attribute
+      for _, attr := range flatten(attributes) {
+        attr := attr.(Attribute)
+        attrs = append(attrs, attr)
+      }
+      val, err := opts.templateHandler(strings.TrimSpace(concat(target)), attrs)
+      if err != nil {
+        return fmt.Sprintf("{{ template error: %s }}", err.Error()), nil
+      }
+      return val, nil
     /*
 // Insert target as first positional attribute, so that it can be
 // generically expanded. The TemplateHandler then needs to shift it out
@@ -779,7 +792,7 @@ tplarg_preproc
     }
 
 template_param
-  <- template_param_name
+  <- key:template_param_name
     val:(
         //("" {return nil, nil/* return endOffset(); */})
         optionalSpaceToken
@@ -791,7 +804,11 @@ template_param
             return { kEndPos: kEndPos, vStartPos: vStartPos, value: (tpv && tpv.tokens) || [] };
             */
         }
-    )? {return val, nil
+    )? {
+    return Attribute{
+      Key: key,
+      Val: val,
+    }, nil
     /*
       if (val !== null) {
           if (val.value !== null) {
@@ -1196,10 +1213,8 @@ wikilink_preproc
   <- "[["
     #{ push(c, "preproc", "]]"); return nil }
     target:wikilink_preprocessor_text?
-    & { log.Printf("wikilink_preproc %#v", target); return true, nil}
     //("" {return nil, nil/* return endOffset(); */})
     lcs:wikilink_content
-    & { log.Printf("wikilink_content %#v %s", lcs, c.text); spew.Dump(target); return true, nil}
     inline_breaks "]]"
     #{ pop(c, "preproc"); return nil }
   {
@@ -2168,7 +2183,6 @@ sol <- (empty_line_with_comments / sol_prefix) comment_or_includes
 sol_prefix
   <- newlineToken
   / & {
-  //log.Printf("sol_prefix %v", c.pos)
   return c.pos.offset == 0, nil
   /*
 // Use the sol flag only at the start of the input

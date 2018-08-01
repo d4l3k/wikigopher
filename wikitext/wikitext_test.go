@@ -2,7 +2,11 @@ package wikitext
 
 import (
 	"log"
+	"strings"
 	"testing"
+
+	"github.com/davecgh/go-spew/spew"
+	"golang.org/x/net/html"
 )
 
 func TestState(t *testing.T) {
@@ -78,6 +82,14 @@ func TestConvert(t *testing.T) {
 			`<div class="bar">Test</div>`,
 			`<p><div class="bar">Test</div></p>`,
 		},
+		{
+			"<ref>Foo\n</ref>Bar",
+			"<p><ref>Foo\n</ref>Bar</p>",
+		},
+		{
+			"<ref>A</ref>B",
+			"<p><ref>A</ref>B</p>",
+		},
 	}
 
 	debugRules(true)
@@ -85,7 +97,7 @@ func TestConvert(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.in, func(t *testing.T) {
-			outBytes, err := Convert([]byte(c.in))
+			outBytes, err := Convert([]byte(c.in), strict())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,6 +105,44 @@ func TestConvert(t *testing.T) {
 			out := string(outBytes)
 			if out != c.want {
 				t.Errorf("Covert(%q) = %q; not %q", c.in, out, c.want)
+			}
+		})
+	}
+}
+
+func TestSanitizationPolicy(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{
+			"<div></div>",
+			"<div></div>",
+		},
+		{
+			"<div>A</div>",
+			"<div>A</div>",
+		},
+		{
+			"<ref></ref>",
+			"<ref></ref>",
+		},
+	}
+
+	p := wikitextPolicy()
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.in, func(t *testing.T) {
+			doc, err := html.Parse(strings.NewReader(c.in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("Doc = %s", spew.Sdump(doc))
+
+			out := p.Sanitize(c.in)
+			if out != c.want {
+				t.Errorf("Sanitize(%q) = %q; not %q", c.in, out, c.want)
 			}
 		})
 	}

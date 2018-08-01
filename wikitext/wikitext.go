@@ -2,8 +2,10 @@ package wikitext
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
@@ -14,12 +16,17 @@ import (
 //go:generate pigeon -o wikitext.peg.go wikitext.peg
 
 // Convert converts wikitext to HTML.
-func Convert(text []byte) ([]byte, error) {
+func Convert(text []byte, options ...ConvertOption) ([]byte, error) {
+	var opts opts
+	for _, opt := range options {
+		opt(&opts)
+	}
 	v, err := Parse(
 		"file.wikitext",
 		append(text, '\n'),
 		GlobalStore("len", len(text)),
 		GlobalStore("text", text),
+		GlobalStore("opts", opts),
 		//Memoize(true),
 		Recover(false),
 		//Debug(true),
@@ -45,24 +52,70 @@ func Convert(text []byte) ([]byte, error) {
 		return nil, errors.Errorf("expected *html.Node got: %T", v)
 	}
 
-	if remaining := processTokens(doc); len(remaining) > 0 {
-		return nil, errors.Errorf("got %d extra children nodes:\n%s", len(remaining), concat(remaining))
+	//log.Printf("Token doc: %q", concat(doc))
+
+	remaining := processTokens(doc)
+	if opts.strict && len(remaining) > 0 {
+		return nil, errors.Errorf("got %d extra children: doc %q, children %q", len(remaining), concat(doc), concat(remaining))
 	}
+	addChildren(doc, remaining)
 
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		return nil, err
 	}
 
+	body := buf.Bytes()
+	body = wikitextPolicy().SanitizeBytes(body)
+	body = bytes.TrimSpace(body)
+	return body, nil
+}
+
+func wikitextPolicy() *bluemonday.Policy {
 	policy := bluemonday.UGCPolicy()
+
+	policy.AllowNoAttrs().OnElements("ref")
+
 	policy.RequireNoFollowOnLinks(false)
 	policy.RequireNoFollowOnFullyQualifiedLinks(true)
 	policy.AllowStyling()
-	policy.AllowAttrs("id", "style").Globally()
+	policy.AllowAttrs("id", "name", "style").Globally()
 	policy.AllowAttrs("_parsestart", "_parseend", "_parsetoken").Globally()
-	policy.AllowElements("ref")
 
-	return bytes.TrimSpace(policy.SanitizeBytes(buf.Bytes())), nil
+	return policy
+}
+
+type Attribute struct {
+	Key, Val interface{}
+}
+
+func (a Attribute) String() string {
+	if a.Val == nil {
+		return concat(a.Key)
+	}
+	return fmt.Sprintf("%s=%s", concat(a.Key), concat(a.Val))
+}
+
+type opts struct {
+	templateHandler func(name string, attrs []Attribute) (interface{}, error)
+	strict          bool
+}
+
+type ConvertOption func(opts *opts)
+
+// TemplateHandler sets the function that runs when a template is found. The
+// return value is included in the final document. Either *html.Node or string
+// values may be returned. String values will be inserted as escaped text.
+func TemplateHandler(f func(name string, attrs []Attribute) (interface{}, error)) ConvertOption {
+	return func(opts *opts) {
+		opts.templateHandler = f
+	}
+}
+
+func strict() ConvertOption {
+	return func(opts *opts) {
+		opts.strict = true
+	}
 }
 
 func flatten(fields ...interface{}) []interface{} {
@@ -75,11 +128,20 @@ func flatten(fields ...interface{}) []interface{} {
 		switch f := f.(type) {
 		case []interface{}:
 			out = append(out, flatten(f...)...)
+		case []*html.Node:
+			for _, n := range f {
+				out = append(out, n)
+			}
+
 		default:
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+func Concat(fields ...interface{}) string {
+	return concat(fields...)
 }
 
 func concat(fields ...interface{}) string {
@@ -90,6 +152,9 @@ func concat(fields ...interface{}) string {
 		}
 
 		switch f := f.(type) {
+		case int:
+			b.WriteString(strconv.Itoa(f))
+
 		case string:
 			b.WriteString(f)
 
@@ -105,6 +170,9 @@ func concat(fields ...interface{}) string {
 
 		case debugRun:
 			b.WriteString(concat(f.Value))
+
+		case Attribute:
+			b.WriteString(f.String())
 
 		default:
 			panic(errors.Errorf("concat: unsupported f type %T: %+v", f, f))
@@ -238,7 +306,7 @@ func match(pattern string, input []byte) bool {
 
 func inlineBreaks(c *current) (bool, error) {
 	pos := c.pos.offset + len(c.text)
-	log.Printf("inlineBreaks %s, %q, pos %d", c.pos, c.text, pos)
+	//log.Printf("inlineBreaks %s, %q, pos %d", c.pos, c.text, pos)
 	input := c.globalStore["text"].([]byte)
 	if len(input) <= pos {
 		log.Printf("inlinebreak false")
@@ -246,7 +314,7 @@ func inlineBreaks(c *current) (bool, error) {
 	}
 	ch := input[pos]
 	if !inlineBreaksRegexp.Match([]byte{ch}) {
-		log.Printf("inlinebreak match fail: %s", []byte{ch})
+		//log.Printf("inlinebreak match fail: %s", []byte{ch})
 		return false, nil
 	}
 
@@ -291,7 +359,7 @@ func inlineBreaks(c *current) (bool, error) {
 
 	case '}':
 		preproc, _ := peek(c, "preproc").(string)
-		log.Printf("inlineBreaks: } %q %q", preproc, input[pos:pos+2])
+		//log.Printf("inlineBreaks: } %q %q", preproc, input[pos:pos+2])
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case ':':
@@ -358,7 +426,7 @@ func inlineBreaks(c *current) (bool, error) {
 			return true, nil
 		}
 		preproc, _ := peek(c, "preproc").(string)
-		log.Printf("inlineBreaks extlink:%#v, preproc:%#v", extlink, preproc)
+		//log.Printf("inlineBreaks extlink:%#v, preproc:%#v", extlink, preproc)
 		return string(input[pos:pos+2]) == preproc, nil
 
 	case '<':
