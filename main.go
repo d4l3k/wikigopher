@@ -18,8 +18,8 @@ import (
 	"strings"
 	"sync"
 
-	"bitbucket.org/creachadair/cityhash"
 	"github.com/blevesearch/bleve"
+	"github.com/creachadair/cityhash"
 	pbzip2 "github.com/d4l3k/go-pbzip2"
 	"github.com/d4l3k/wikigopher/wikitext"
 	"github.com/pkg/errors"
